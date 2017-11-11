@@ -1,6 +1,17 @@
+typedef struct prmpd
+{
+	char *name;
+	int type;
+	int output;
+	BYTE *value;
+}
+RPCPRMPARAMDATA;
+
 typedef struct pd
 {
 	char *spname;
+	RPCPRMPARAMDATA **params;
+	int paramslen;
 	char *interfacesfile;
 	int textsize;
 	char *user;

@@ -64,8 +64,11 @@
 
 void pusage(void);
 int process_parameters(int, char **, struct pd *);
+int process_parameter_rpcprm(RPCPARAMDATA * pdata, char *optarg);
+int free_parameters(RPCPARAMDATA * pdata);
 int login_to_database(struct pd *, DBPROCESS **);
 
+int print_input_debug(RPCPARAMDATA * pdata, DBPROCESS * dbproc);
 int print_columns(RPCPARAMDATA * pdata, DBPROCESS * dbproc);
 int print_column_or_return(RPCPARAMDATA * pdata, DBPROCESS * dbproc, int colno, int is_ret);
 int print_row(RPCPARAMDATA * pdata, DBPROCESS * dbproc, int num_cols);
@@ -82,6 +85,7 @@ main(int argc, char **argv)
 {
 	RPCPARAMDATA params;
 	DBPROCESS *dbproc;
+	int ok = 0;
 
 	setlocale(LC_ALL, "");
 
@@ -95,7 +99,7 @@ main(int argc, char **argv)
 	params.textsize = 2147483647;	/* our default text size is the LARGEST */
 
 	if (process_parameters(argc, argv, &params) == FALSE) {
-		exit(EXIT_FAILURE);
+		goto cleanup;
 	}
 	if (getenv("FREERPC")) {
 		fprintf(stderr, "User name: \"%s\"\n", params.user);
@@ -103,17 +107,18 @@ main(int argc, char **argv)
 
 
 	if (login_to_database(&params, &dbproc) == FALSE) {
-		exit(EXIT_FAILURE);
+		goto cleanup;
 	}
 
-	if (!setoptions(dbproc, &params))
-		return FALSE;
-
-	if (!do_rpc(&params, dbproc)) {
-		exit(EXIT_FAILURE);
+	if (setoptions(dbproc, &params) == FALSE) {
+		goto cleanup;
 	}
 
-	exit(EXIT_SUCCESS);
+	ok = do_rpc(&params, dbproc);
+
+cleanup:
+	free_parameters(&params);
+	exit(ok ? EXIT_SUCCESS : EXIT_FAILURE);
 
 	return 0;
 }
@@ -142,7 +147,7 @@ process_parameters(int argc, char **argv, RPCPARAMDATA *pdata)
 	 * Get the rest of the arguments
 	 */
 	optind = 2; /* start processing options after spname */
-	while ((ch = getopt(argc, argv, "U:P:I:S:T:A:O:0:C:dvVD:")) != -1) {
+	while ((ch = getopt(argc, argv, "p:U:P:I:S:T:A:O:0:C:dvVD:")) != -1) {
 		switch (ch) {
 		case 'v':
 		case 'V':
@@ -151,6 +156,9 @@ process_parameters(int argc, char **argv, RPCPARAMDATA *pdata)
 			break;
 		case 'd':
 			tdsdump_open(NULL);
+			break;
+		case 'p':
+			process_parameter_rpcprm(pdata, optarg);
 			break;
 		case 'U':
 			pdata->Uflag++;
@@ -211,6 +219,47 @@ process_parameters(int argc, char **argv, RPCPARAMDATA *pdata)
 	}
 
 	return (TRUE);
+}
+
+int
+process_parameter_rpcprm(RPCPARAMDATA * pdata, char *optarg)
+{
+	RPCPRMPARAMDATA *rpcprm;
+
+	if (!pdata->paramslen) {
+		pdata->paramslen = 1;
+		pdata->params = malloc(sizeof(RPCPRMPARAMDATA*));
+	} else {
+		pdata->paramslen++;
+		pdata->params = realloc(pdata->params, pdata->paramslen * sizeof(RPCPRMPARAMDATA*));
+	}
+
+	/* TODO: name/num & type */
+	rpcprm = malloc(sizeof(RPCPRMPARAMDATA));
+	memset(rpcprm, 0, sizeof(*rpcprm));
+	pdata->params[pdata->paramslen-1] = rpcprm;
+	rpcprm->type = SQLCHAR;
+	rpcprm->value = (BYTE *)strdup(optarg);
+
+	return TRUE;
+}
+
+int
+free_parameters(RPCPARAMDATA * pdata)
+{
+	int i;
+
+	if (!pdata->paramslen) {
+		return TRUE;
+	}
+
+	for (i=0; i<pdata->paramslen; i++) {
+		free(pdata->params[i]);
+	}
+
+	free(pdata->params);
+	pdata->paramslen = 0;
+	return TRUE;
 }
 
 int
@@ -275,6 +324,36 @@ login_to_database(RPCPARAMDATA * pdata, DBPROCESS ** pdbproc)
 	login = NULL;
 
 	return (TRUE);
+}
+
+int
+print_input_debug(RPCPARAMDATA * pdata, DBPROCESS * dbproc)
+{
+	int i;
+	RPCPRMPARAMDATA *rpcprm;
+
+	printf("exec %s", pdata->spname);
+
+	if (!pdata->paramslen) {
+		printf("\n");
+		return TRUE;
+	}
+
+	printf(", params:\n");
+	for (i=0; i<pdata->paramslen; i++) {
+		rpcprm = pdata->params[i];
+		printf(
+			"%3d %s: type x%x, out %d, value %s\n",
+			i,
+			rpcprm->name,
+			rpcprm->type,
+			rpcprm->output,
+			/* FIXME: typed ... */
+			(char *)rpcprm->value
+		);
+	}
+
+	return TRUE;
 }
 
 int
@@ -366,20 +445,46 @@ do_rpc(RPCPARAMDATA * pdata, DBPROCESS * dbproc)
 	int num_res = 0;
 	int num_cols = 0;
 
-	printf("exec %s (ver %d)\n", pdata->spname, dbtds(dbproc));
+	RPCPRMPARAMDATA *rpcprm;
+	int i, datalen, status;
+	long maxlen;
 
+	print_input_debug(pdata, dbproc);
+
+	/* rpc init: ->spname */
 	if (FAIL == dbrpcinit(dbproc, pdata->spname, 0)) {
 		fprintf(stderr, "dbrpcinit failed\n");
 		return FALSE;
 	}
 
-	//dbrpcparam... / noneed = onfail dbrpcinit(dbproc, "", DBRPCRESET);
+	/* rpc bind: ->params */
+	for (i=0; i<pdata->paramslen; i++) {
+		rpcprm = pdata->params[i];
+		datalen = (int)strlen((char *)rpcprm->value);
+		status = 0;
+		maxlen = -1;
+		/* TODO: outputs */
+		if (rpcprm->output) {
+			status = 0;
+			maxlen = datalen;
+		}
+		if (FAIL == dbrpcparam(dbproc, rpcprm->name, (BYTE)status, rpcprm->type, maxlen, datalen, rpcprm->value)) {
+			fprintf(stderr, "dbrpcparam failed for %d / %s\n", i, rpcprm->name);
+			/* NOTE: need to reset to retry: dbrpcinit(dbproc, "", DBRPCRESET);*/
+			return FALSE;
+		}
+	}
 
+	/* for now  rpcprms are unused after that */
+	free_parameters(pdata);
+
+	/* rpc send */
 	if (dbrpcsend(dbproc) == FAIL) {
 		fprintf(stderr, "dbrpcsend failed\n");
 		return FALSE;
 	}
 
+	/* fetch & print results */
 	while (SUCCEED == (ret_code = dbresults(dbproc))) {
 		printf("--------------------\nresult %d\n", ++num_res);
 		num_cols = print_columns(pdata, dbproc);
