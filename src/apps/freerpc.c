@@ -66,6 +66,10 @@ void pusage(void);
 int process_parameters(int, char **, struct pd *);
 int login_to_database(struct pd *, DBPROCESS **);
 
+int print_columns(RPCPARAMDATA * pdata, DBPROCESS * dbproc);
+int print_column_or_return(RPCPARAMDATA * pdata, DBPROCESS * dbproc, int colno, int is_ret);
+int print_row(RPCPARAMDATA * pdata, DBPROCESS * dbproc, int num_cols);
+int print_returns(RPCPARAMDATA * pdata, DBPROCESS * dbproc);
 int do_rpc(RPCPARAMDATA * pdata, DBPROCESS * dbproc);
 int setoptions (DBPROCESS * dbproc, RPCPARAMDATA * params);
 
@@ -274,12 +278,93 @@ login_to_database(RPCPARAMDATA * pdata, DBPROCESS ** pdbproc)
 }
 
 int
+print_columns(RPCPARAMDATA * pdata, DBPROCESS * dbproc)
+{
+	int num_cols = dbnumcols(dbproc);
+	int i;
+	char *name;
+
+	for (i=1; i<=num_cols; i++) {
+		name = (char*)dbcolname(dbproc, i);
+		if (strlen(name)) {
+			printf("%s", name);
+		} else {
+			printf("[%d]", i);
+		}
+		printf(i == num_cols ? "\n" : "\t");
+	}
+
+	return num_cols;
+}
+
+int
+print_column_or_return(RPCPARAMDATA * pdata, DBPROCESS * dbproc, int colno, int is_ret)
+{
+	int type;
+	BYTE *data;
+	DBCHAR *tmp_data;
+	DBINT data_len, tmp_data_len;
+
+	if (is_ret) {
+		type = dbrettype(dbproc, colno);
+		data = dbretdata(dbproc, colno);
+		data_len = dbretlen(dbproc, colno);
+	} else {
+		type = dbcoltype(dbproc, colno);
+		data = dbdata(dbproc, colno);
+		data_len = dbdatlen(dbproc, colno);
+	}
+
+	if (!dbwillconvert(type, SYBCHAR)) {
+		fprintf(stderr, "can't print column %d\n", colno);
+		return FALSE;
+	}
+
+	tmp_data_len = 48 + (2 * (data_len)); /* FIXME: We allocate more than we need here */
+	tmp_data = malloc(tmp_data_len);
+	data_len = dbconvert(NULL, type, data, data_len, SYBCHAR, (BYTE*)tmp_data, -1);
+
+	printf("%s", tmp_data);
+
+	free(tmp_data);
+
+	return TRUE;
+}
+
+int
+print_row(RPCPARAMDATA * pdata, DBPROCESS * dbproc, int num_cols)
+{
+	int i;
+
+	for (i=1; i<=num_cols; i++) {
+		print_column_or_return(pdata, dbproc, i, 0);
+		printf(i == num_cols ? "\n" : "\t");
+	}
+
+	return num_cols;
+}
+
+int
+print_returns(RPCPARAMDATA * pdata, DBPROCESS * dbproc)
+{
+	int num_rets = dbnumrets(dbproc);
+	int i;
+
+	for (i=1; i<=num_rets; i++) {
+		printf("%s: ",(char*)dbretname(dbproc, i));
+		print_column_or_return(pdata, dbproc, i, 1);
+		printf("\n");
+	}
+
+	return num_rets;
+}
+
+int
 do_rpc(RPCPARAMDATA * pdata, DBPROCESS * dbproc)
 {
-	DBINT num_rows = 0;
-	int num_cols = 0;
-	int num_res = 0;
 	RETCODE ret_code = 0;
+	int num_res = 0;
+	int num_cols = 0;
 
 	printf("exec %s (ver %d)\n", pdata->spname, dbtds(dbproc));
 
@@ -295,20 +380,20 @@ do_rpc(RPCPARAMDATA * pdata, DBPROCESS * dbproc)
 		return FALSE;
 	}
 
-	num_res = 0;
 	while (SUCCEED == (ret_code = dbresults(dbproc))) {
-		num_res++;
-		num_cols = dbnumcols(dbproc);
-		num_rows = 0;
+		printf("--------------------\nresult %d\n", ++num_res);
+		num_cols = print_columns(pdata, dbproc);
 		while(NO_MORE_ROWS != dbnextrow(dbproc)) {
-			num_rows++;
+			print_row(pdata, dbproc, num_cols);
 		};
-		printf("result %d = %d cols, %d rows\n", num_res, num_cols, num_rows);
 	}
 	if (ret_code != SUCCEED && ret_code != NO_MORE_RESULTS) {
 		fprintf(stderr, "dbresults failed\n");
 		return FALSE;
 	}
+	printf("--------------------\nreturns\n");
+	print_returns(pdata, dbproc);
+	printf("status: %d\n", dbretstatus(dbproc));
 
 	return TRUE;
 }
