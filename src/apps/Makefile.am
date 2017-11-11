@@ -4,7 +4,7 @@ SUBDIRS		= fisql
 
 DIST_SUBDIRS	= $(SUBDIRS)
 
-bin_PROGRAMS	= tsql freebcp bsqldb defncopy datacopy
+bin_PROGRAMS	= tsql freebcp bsqldb defncopy datacopy freerpc
 # build bsqlodbc only if the ODBC library was to be built
 if ODBC
 bin_PROGRAMS	+= bsqlodbc
@@ -38,5 +38,8 @@ datacopy_SOURCES= datacopy.c
 datacopy_LDADD	= ../dblib/libsybdb.la \
 		  ../replacements/libreplacements.la \
 		$(LTLIBICONV)
+
+freerpc_LDADD	= ../dblib/libsybdb.la ../replacements/libreplacements.la $(LTLIBICONV)
+freerpc_SOURCES = freerpc.c
 
 EXTRA_DIST = CMakeLists.txt

@@ -1,6 +1,6 @@
 set(libs ${lib_NETWORK} ${lib_BASE})
 
-foreach(target freebcp bsqldb defncopy datacopy)
+foreach(target freebcp bsqldb defncopy datacopy freerpc)
 	add_executable(${target} ${target}.c)
 	target_link_libraries(${target} sybdb replacements tdsutils ${libs})
 endforeach(target)
