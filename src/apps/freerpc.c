@@ -276,48 +276,39 @@ login_to_database(RPCPARAMDATA * pdata, DBPROCESS ** pdbproc)
 int
 do_rpc(RPCPARAMDATA * pdata, DBPROCESS * dbproc)
 {
-	printf("TODO: %s, ver %d\n", pdata->spname, dbtds(dbproc));
-/* TODO...
-	DBINT rows_read = 0;
-	int i;
+	DBINT num_rows = 0;
 	int num_cols = 0;
+	int num_res = 0;
 	RETCODE ret_code = 0;
 
-	if (FAIL == dbrpcinit(dbproc, pdata->spname))
-		return FALSE;
+	printf("exec %s (ver %d)\n", pdata->spname, dbtds(dbproc));
 
-	//dbrpcparam...
+	if (FAIL == dbrpcinit(dbproc, pdata->spname, 0)) {
+		fprintf(stderr, "dbrpcinit failed\n");
+		return FALSE;
+	}
+
+	//dbrpcparam... / noneed = onfail dbrpcinit(dbproc, "", DBRPCRESET);
 
 	if (dbrpcsend(dbproc) == FAIL) {
-		fprintf(stderr, "dbsqlexec failed\n");
+		fprintf(stderr, "dbrpcsend failed\n");
 		return FALSE;
 	}
 
-	while (NO_MORE_RESULTS != (ret_code = dbresults(dbproc))) {
-		if (ret_code == SUCCEED && num_cols == 0) {
-			num_cols = dbnumcols(dbproc);
-		}
+	num_res = 0;
+	while (SUCCEED == (ret_code = dbresults(dbproc))) {
+		num_res++;
+		num_cols = dbnumcols(dbproc);
+		num_rows = 0;
+		while(NO_MORE_ROWS != dbnextrow(dbproc)) {
+			num_rows++;
+		};
+		printf("result %d = %d cols, %d rows\n", num_res, num_cols, num_rows);
 	}
-
-	if (0 == num_cols) {
-		fprintf(stderr, "Error in dbnumcols\n");
+	if (ret_code != SUCCEED && ret_code != NO_MORE_RESULTS) {
+		fprintf(stderr, "dbresults failed\n");
 		return FALSE;
 	}
-
-	for (i = 1; i < num_cols; ++i) {
-		if (bcp_colfmt(dbproc, i, SYBCHAR, 0, -1, (const BYTE *) pdata->fieldterm,
-			       pdata->fieldtermlen, i) == FAIL) {
-			fprintf(stderr, "Error in bcp_colfmt col %d\n", i);
-			return FALSE;
-		}
-	}
-
-	if (bcp_colfmt(dbproc, num_cols, SYBCHAR, 0, -1, (const BYTE *) pdata->rowterm,
-		       pdata->rowtermlen, num_cols) == FAIL) {
-		fprintf(stderr, "Error in bcp_colfmt col %d\n", num_cols);
-		return FALSE;
-	}
-*/
 
 	return TRUE;
 }
