@@ -82,6 +82,7 @@ int err_handler(DBPROCESS * dbproc, int severity, int dberr, int oserr, char *db
 int msg_handler(DBPROCESS * dbproc, DBINT msgno, int msgstate, int severity, char *msgtext, char *srvname, char *procname,
 		int line);
 
+int read_file(char *name, BYTE **pbuf, int *plen, int maxlen);
 char *to_uppercase(char *s);
 #define PRINT_NAME_OR_NUM(name, num) name && strlen(name) ? printf("%s", name) : printf("[%d]", num)
 
@@ -152,7 +153,7 @@ process_parameters(int argc, char **argv, RPCPARAMDATA *pdata)
 	 * Get the rest of the arguments
 	 */
 	optind = 2; /* start processing options after spname */
-	while ((ch = getopt(argc, argv, "p:n:t:oNU:P:I:S:T:A:O:0:C:dvVD:")) != -1) {
+	while ((ch = getopt(argc, argv, "p:n:ft:oNU:P:I:S:T:A:O:0:C:dvVD:")) != -1) {
 		switch (ch) {
 		case 'v':
 		case 'V':
@@ -176,6 +177,9 @@ process_parameters(int argc, char **argv, RPCPARAMDATA *pdata)
 		case 'n':
 			free(pdata->paramname);
 			pdata->paramname = strdup(optarg);
+			break;
+		case 'f':
+			pdata->paramfile = 1;
 			break;
 		case 'o':
 			pdata->paramoutput = 1;
@@ -360,6 +364,12 @@ process_parameter_rpcprm(RPCPARAMDATA * pdata, char *optarg)
 		return TRUE;
 	}
 
+	/* read raw data from file */
+	if (pdata->paramfile) {
+		pdata->paramfile = 0;
+		return read_file(optarg, &(rpcprm->value), &(rpcprm->strlen), pdata->textsize);
+	}
+
 	/* convert non-text data */
 	/* TODO: parse date ... */
 	switch(get_datatype(rpcprm->type)) {
@@ -389,6 +399,7 @@ process_parameter_rpcprm(RPCPARAMDATA * pdata, char *optarg)
 		}
 		case DATATYPE_STR: {
 			rpcprm->value = (BYTE *)(strdup(optarg));
+			rpcprm->strlen = (int)strlen(optarg);
 			break;
 		}
 		default:
@@ -521,7 +532,7 @@ print_input_debug(RPCPARAMDATA * pdata, DBPROCESS * dbproc)
 				printf("(double) %f\n", *((double *)rpcprm->value));
 				break;
 			default:
-				printf("(char*) %s\n", (char *)rpcprm->value);
+				printf("(char*) %d %s\n", rpcprm->strlen, (char *)rpcprm->value);
 		}
 	}
 
@@ -639,16 +650,14 @@ do_rpc(RPCPARAMDATA * pdata, DBPROCESS * dbproc)
 		rpcprm = pdata->params[i];
 		maxlen = datalen = -1;
 		status = rpcprm->output ? 1 : 0;
-		if (rpcprm->value == NULL) {
-			datalen = 0;
-		}
 		if (DATATYPE_STR == get_datatype(rpcprm->type)) {
-			if (rpcprm->value != NULL) {
-				datalen = (int)strlen((char *)rpcprm->value);
-			}
+			datalen = rpcprm->strlen;
 			if (rpcprm->output) {
 				maxlen = 8000;
 			}
+		}
+		if (rpcprm->value == NULL) {
+			datalen = 0;
 		}
 		if (FAIL == dbrpcparam(dbproc, rpcprm->name, (BYTE)status, rpcprm->type, maxlen, datalen, rpcprm->value)) {
 			fprintf(stderr, "dbrpcparam failed for %d / %s\n", i, rpcprm->name);
@@ -802,6 +811,44 @@ msg_handler(DBPROCESS * dbproc, DBINT msgno, int msgstate, int severity, char *m
 	fprintf(stderr, "\n\t%s\n", msgtext);
 
 	return (0);
+}
+
+int
+read_file(char *name, BYTE **pbuf, int *plen, int maxlen)
+{
+	FILE *fp;
+	long len;
+	size_t ok;
+	char *buf;
+	fp = fopen(name, "rb");
+	if (!fp) {
+		fprintf(stderr, "Can't open input param file: %s\n", name);
+		return FALSE;
+	}
+	fseek(fp, 0, SEEK_END);
+	len = ftell(fp);
+	fseek(fp, 0, SEEK_SET);
+
+	/* TODO: check fixed length... */
+	if (len > maxlen) {
+		fprintf(stderr, "input file truncated to %d\n", maxlen);
+		len = maxlen;
+	}
+
+	buf = malloc(len + 1);
+	ok = len ? fread(buf, len, 1, fp) : 1;
+	fclose(fp);
+
+	buf[len] = 0;
+
+	if (!ok) {
+		fprintf(stderr, "Error reading file %s\n", name);
+	}
+
+	*pbuf = (BYTE *)buf;
+	*plen = len;
+
+	return TRUE;
 }
 
 char *

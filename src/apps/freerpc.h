@@ -17,6 +17,7 @@ typedef struct prmpd
 	int type;
 	int output;
 	BYTE *value;
+	int strlen;
 }
 RPCPRMPARAMDATA;
 
@@ -26,6 +27,7 @@ typedef struct pd
 	RPCPRMPARAMDATA **params;
 	int paramslen;
 	char *paramname;
+	int paramfile;
 	int paramtype;
 	int paramoutput;
 	int paramnull;
