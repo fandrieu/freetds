@@ -16,6 +16,7 @@ typedef struct prmpd
 	char *name;
 	int type;
 	int output;
+	char *file;
 	BYTE *value;
 	int strlen;
 }
