@@ -148,7 +148,7 @@ process_parameters(int argc, char **argv, RPCPARAMDATA *pdata)
 	 * Get the rest of the arguments
 	 */
 	optind = 2; /* start processing options after spname */
-	while ((ch = getopt(argc, argv, "p:n:U:P:I:S:T:A:O:0:C:dvVD:")) != -1) {
+	while ((ch = getopt(argc, argv, "p:n:NU:P:I:S:T:A:O:0:C:dvVD:")) != -1) {
 		switch (ch) {
 		case 'v':
 		case 'V':
@@ -160,6 +160,9 @@ process_parameters(int argc, char **argv, RPCPARAMDATA *pdata)
 			break;
 		case 'p':
 			process_parameter_rpcprm(pdata, optarg);
+			break;
+		case 'N':
+			pdata->paramnull = 1;
 			break;
 		case 'n':
 			free(pdata->paramname);
@@ -248,6 +251,11 @@ process_parameter_rpcprm(RPCPARAMDATA * pdata, char *optarg)
 	if (pdata->paramname) {
 		rpcprm->name = pdata->paramname;
 		pdata->paramname = NULL;
+	}
+	if (pdata->paramnull) {
+		pdata->paramnull = 0;
+
+		return TRUE;
 	}
 
 	rpcprm->type = SQLCHAR;
@@ -492,6 +500,9 @@ do_rpc(RPCPARAMDATA * pdata, DBPROCESS * dbproc)
 		datalen = (int)strlen((char *)rpcprm->value);
 		status = 0;
 		maxlen = -1;
+		if (rpcprm->value == NULL) {
+			datalen = 0;
+		}
 		/* TODO: outputs */
 		if (rpcprm->output) {
 			status = 0;
@@ -598,7 +609,7 @@ void
 pusage(void)
 {
 	fprintf(stderr, "usage:  freerpc procedure\n");
-	fprintf(stderr, "        [-n name] [-p param1]\n");
+	fprintf(stderr, "        [-n name] [-N] [-p param1]\n");
 	fprintf(stderr, "        [-n name] [-p paramN]\n");
 	fprintf(stderr, "        [-U username] [-P password] [-I interfaces_file] [-S server] [-D database]\n");
 	fprintf(stderr, "        [-v] [-d] [-O \"set connection_option on|off, ...]\"\n");

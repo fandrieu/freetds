@@ -13,6 +13,7 @@ typedef struct pd
 	RPCPRMPARAMDATA **params;
 	int paramslen;
 	char *paramname;
+	int paramnull;
 	char *interfacesfile;
 	int textsize;
 	char *user;
