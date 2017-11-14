@@ -27,6 +27,7 @@ typedef struct pd
 	int paramslen;
 	char *paramname;
 	int paramtype;
+	int paramoutput;
 	int paramnull;
 	char *interfacesfile;
 	int textsize;

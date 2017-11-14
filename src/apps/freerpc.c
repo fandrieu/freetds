@@ -152,7 +152,7 @@ process_parameters(int argc, char **argv, RPCPARAMDATA *pdata)
 	 * Get the rest of the arguments
 	 */
 	optind = 2; /* start processing options after spname */
-	while ((ch = getopt(argc, argv, "p:n:t:NU:P:I:S:T:A:O:0:C:dvVD:")) != -1) {
+	while ((ch = getopt(argc, argv, "p:n:t:oNU:P:I:S:T:A:O:0:C:dvVD:")) != -1) {
 		switch (ch) {
 		case 'v':
 		case 'V':
@@ -176,6 +176,9 @@ process_parameters(int argc, char **argv, RPCPARAMDATA *pdata)
 		case 'n':
 			free(pdata->paramname);
 			pdata->paramname = strdup(optarg);
+			break;
+		case 'o':
+			pdata->paramoutput = 1;
 			break;
 		case 'U':
 			pdata->Uflag++;
@@ -342,11 +345,14 @@ process_parameter_rpcprm(RPCPARAMDATA * pdata, char *optarg)
 	memset(rpcprm, 0, sizeof(*rpcprm));
 	pdata->params[pdata->paramslen-1] = rpcprm;
 
-	/* TODO: output */
 	rpcprm->type = pdata->paramtype ? pdata->paramtype : RPCRPM_DEFAULTTYPE;
 	if (pdata->paramname) {
 		rpcprm->name = pdata->paramname;
 		pdata->paramname = NULL;
+	}
+	if (pdata->paramoutput) {
+		rpcprm->output = pdata->paramoutput;
+		pdata->paramoutput = 0;
 	}
 	if (pdata->paramnull) {
 		pdata->paramnull = 0;
@@ -640,16 +646,17 @@ do_rpc(RPCPARAMDATA * pdata, DBPROCESS * dbproc)
 	for (i=0; i<pdata->paramslen; i++) {
 		rpcprm = pdata->params[i];
 		maxlen = datalen = -1;
-		status = 0;
+		status = rpcprm->output ? 1 : 0;
 		if (rpcprm->value == NULL) {
 			datalen = 0;
-		} else if (DATATYPE_STR == get_datatype(rpcprm->type)) {
-			datalen = (int)strlen((char *)rpcprm->value);
 		}
-		/* TODO: outputs */
-		if (rpcprm->output) {
-			status = 0;
-			maxlen = datalen;
+		if (DATATYPE_STR == get_datatype(rpcprm->type)) {
+			if (rpcprm->value != NULL) {
+				datalen = (int)strlen((char *)rpcprm->value);
+			}
+			if (rpcprm->output) {
+				maxlen = 8000;
+			}
 		}
 		if (FAIL == dbrpcparam(dbproc, rpcprm->name, (BYTE)status, rpcprm->type, maxlen, datalen, rpcprm->value)) {
 			fprintf(stderr, "dbrpcparam failed for %d / %s\n", i, rpcprm->name);
@@ -752,7 +759,7 @@ void
 pusage(void)
 {
 	fprintf(stderr, "usage:  freerpc procedure\n");
-	fprintf(stderr, "        [-n name] [-t type] [-N] [-p param1]\n");
+	fprintf(stderr, "        [-n name] [-t type] [-o output_len] [-N] [-p param1]\n");
 	fprintf(stderr, "        [-n name] [-p paramN]\n");
 	fprintf(stderr, "        [-U username] [-P password] [-I interfaces_file] [-S server] [-D database]\n");
 	fprintf(stderr, "        [-v] [-d] [-O \"set connection_option on|off, ...]\"\n");
