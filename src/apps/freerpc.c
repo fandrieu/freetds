@@ -72,7 +72,6 @@ int login_to_database(struct pd *, DBPROCESS **);
 
 int print_input_debug(RPCPARAMDATA * pdata, DBPROCESS * dbproc);
 int print_columns(RPCPARAMDATA * pdata, DBPROCESS * dbproc);
-int print_column_or_return_name(DBPROCESS * dbproc, int colno, int is_ret);
 int print_column_or_return(RPCPARAMDATA * pdata, DBPROCESS * dbproc, int colno, int is_ret);
 int print_row(RPCPARAMDATA * pdata, DBPROCESS * dbproc, int num_cols);
 int print_returns(RPCPARAMDATA * pdata, DBPROCESS * dbproc);
@@ -84,6 +83,7 @@ int msg_handler(DBPROCESS * dbproc, DBINT msgno, int msgstate, int severity, cha
 		int line);
 
 char *to_uppercase(char *s);
+#define PRINT_NAME_OR_NUM(name, num) name && strlen(name) ? printf("%s", name) : printf("[%d]", num)
 
 int
 main(int argc, char **argv)
@@ -535,29 +535,11 @@ print_columns(RPCPARAMDATA * pdata, DBPROCESS * dbproc)
 	int i;
 
 	for (i=1; i<=num_cols; i++) {
-		print_column_or_return_name(dbproc, i, 0);
+		PRINT_NAME_OR_NUM((char *)dbcolname(dbproc, i), i);
 		printf(i == num_cols ? "\n" : "\t");
 	}
 
 	return num_cols;
-}
-
-int
-print_column_or_return_name(DBPROCESS * dbproc, int colno, int is_ret)
-{
-	char * name;
-
-	if (is_ret)
-		name = (char*)dbretname(dbproc, colno);
-	else
-		name = (char*)dbcolname(dbproc, colno);
-
-	if (strlen(name))
-		printf("%s", name);
-	else
-		printf("[%d]", colno);
-
-	return TRUE;
 }
 
 int
@@ -610,11 +592,21 @@ print_row(RPCPARAMDATA * pdata, DBPROCESS * dbproc, int num_cols)
 int
 print_returns(RPCPARAMDATA * pdata, DBPROCESS * dbproc)
 {
+	RPCPRMPARAMDATA *rpcprm = NULL;
+	int prm_i = -1, i;
 	int num_rets = dbnumrets(dbproc);
-	int i;
 
 	for (i=1; i<=num_rets; i++) {
-		print_column_or_return_name(dbproc, i, 1);
+		for (prm_i++; prm_i<pdata->paramslen; prm_i++) {
+			rpcprm = pdata->params[prm_i];
+			if (rpcprm->output)
+				break;
+		}
+		if (!rpcprm) {
+			fprintf(stderr, "Internal error: can't find output parameter n°%d\n", i);
+			return FALSE;
+		}
+		PRINT_NAME_OR_NUM(rpcprm->name, prm_i);
 		printf(": ");
 		print_column_or_return(pdata, dbproc, i, 1);
 		printf("\n");
@@ -671,8 +663,9 @@ do_rpc(RPCPARAMDATA * pdata, DBPROCESS * dbproc)
 		return FALSE;
 	}
 
-	/* for now, rpcprms are unused after that */
-	free_parameters(pdata);
+	/* here we could clear the values
+	free_parameters_values(pdata);
+	*/
 
 	/* fetch & print results */
 	while (SUCCEED == (ret_code = dbresults(dbproc))) {
