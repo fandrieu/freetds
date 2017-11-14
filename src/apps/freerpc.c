@@ -64,6 +64,8 @@
 
 void pusage(void);
 int process_parameters(int, char **, struct pd *);
+enum datatype get_datatype(int type);
+int process_parameter_rpctype(RPCPARAMDATA * pdata, char *optarg);
 int process_parameter_rpcprm(RPCPARAMDATA * pdata, char *optarg);
 int free_parameters(RPCPARAMDATA * pdata);
 int login_to_database(struct pd *, DBPROCESS **);
@@ -80,6 +82,8 @@ int setoptions (DBPROCESS * dbproc, RPCPARAMDATA * params);
 int err_handler(DBPROCESS * dbproc, int severity, int dberr, int oserr, char *dberrstr, char *oserrstr);
 int msg_handler(DBPROCESS * dbproc, DBINT msgno, int msgstate, int severity, char *msgtext, char *srvname, char *procname,
 		int line);
+
+char *to_uppercase(char *s);
 
 int
 main(int argc, char **argv)
@@ -148,7 +152,7 @@ process_parameters(int argc, char **argv, RPCPARAMDATA *pdata)
 	 * Get the rest of the arguments
 	 */
 	optind = 2; /* start processing options after spname */
-	while ((ch = getopt(argc, argv, "p:n:NU:P:I:S:T:A:O:0:C:dvVD:")) != -1) {
+	while ((ch = getopt(argc, argv, "p:n:t:NU:P:I:S:T:A:O:0:C:dvVD:")) != -1) {
 		switch (ch) {
 		case 'v':
 		case 'V':
@@ -159,7 +163,12 @@ process_parameters(int argc, char **argv, RPCPARAMDATA *pdata)
 			tdsdump_open(NULL);
 			break;
 		case 'p':
-			process_parameter_rpcprm(pdata, optarg);
+			if (!process_parameter_rpcprm(pdata, optarg))
+				return FALSE;
+			break;
+		case 't':
+			if (!process_parameter_rpctype(pdata, optarg))
+				return FALSE;
 			break;
 		case 'N':
 			pdata->paramnull = 1;
@@ -167,7 +176,6 @@ process_parameters(int argc, char **argv, RPCPARAMDATA *pdata)
 		case 'n':
 			free(pdata->paramname);
 			pdata->paramname = strdup(optarg);
-			break;
 			break;
 		case 'U':
 			pdata->Uflag++;
@@ -230,6 +238,93 @@ process_parameters(int argc, char **argv, RPCPARAMDATA *pdata)
 	return (TRUE);
 }
 
+/* NOTE: don't use FreeTDS internal macros on purpose */
+enum datatype
+get_datatype(int type) {
+	switch(type) {
+		case SYBINT1:
+		case SYBINT2:
+		case SYBINT4:
+		case SYBINT8:
+		case SYBBIT:
+		case SYBMONEY4:
+		case SYBMONEY:
+			return DATATYPE_LONG;
+		case SYBFLT8:
+		case SYBREAL:
+		case SYBNUMERIC:
+		case SYBDECIMAL:
+			return DATATYPE_DOUBLE;
+		default:
+			return DATATYPE_STR;
+	}
+}
+
+int
+process_parameter_rpctype(RPCPARAMDATA * pdata, char *optarg)
+{
+	char *s = to_uppercase(optarg);
+	int type = 0, i;
+
+	/* enable all for testing purposes... */
+	const RPCKEYVAL types[] = {
+		{"DEFAULT", RPCRPM_DEFAULTTYPE},
+		{"0", RPCRPM_DEFAULTTYPE},
+		{"CHAR", SYBCHAR},
+		{"VARCHAR", SYBVARCHAR},
+		/* {"INTN", SYBINTN},	needs len */
+		{"INT1", SYBINT1},
+		{"INT2", SYBINT2},
+		{"INT4", SYBINT4},
+		{"INT8", SYBINT8},
+		{"FLT8", SYBFLT8},
+		{"DATETIME", SYBDATETIME},
+		{"BIT", SYBBIT},
+		/* {"BITN", SYBBITN},	needs len */
+		{"TEXT", SYBTEXT},
+		{"NTEXT", SYBNTEXT},
+		{"IMAGE", SYBIMAGE},
+		{"MONEY4", SYBMONEY4},
+		{"MONEY", SYBMONEY},
+		{"DATETIME4", SYBDATETIME4},
+		{"REAL", SYBREAL},
+		{"BINARY", SYBBINARY},
+		/* {"VOID", SYBVOID},	segfault */
+		{"VARBINARY", SYBVARBINARY},
+		{"NUMERIC", SYBNUMERIC},
+		{"DECIMAL", SYBDECIMAL},
+		/* {"FLTN", SYBFLTN},	needs len */
+		/* {"MONEYN", SYBMONEYN},	needs len */
+		/* {"DATETIMN", SYBDATETIMN},	needs len */
+		{"NVARCHAR", SYBNVARCHAR},
+		{"DATE", SYBDATE},
+		{"TIME", SYBTIME},
+		{"BIGDATETIME", SYB5BIGDATETIME},
+		{"BIGTIME", SYB5BIGTIME},
+		{"MSDATE", SYBMSDATE},
+		{"MSTIME", SYBMSTIME},
+		{"MSDATETIME2", SYBMSDATETIME2},
+		{"MSDATETIMEOFFSET", SYBMSDATETIMEOFFSET},
+	};
+	int typeslen = sizeof(types)/sizeof(types[0]);
+
+	for(i=0; i<typeslen; i++) {
+		if(strcmp(s, types[i].key) == 0) {
+			type = types[i].value;
+			break;
+		}
+	}
+	free(s);
+	if (!type) {
+		fprintf(stderr, "Unsupported rpc param type %s\n", optarg);
+		pdata->paramtype = RPCRPM_DEFAULTTYPE;
+		return FALSE;
+	}
+
+	pdata->paramtype = type;
+	return TRUE;
+}
+
 int
 process_parameter_rpcprm(RPCPARAMDATA * pdata, char *optarg)
 {
@@ -247,7 +342,8 @@ process_parameter_rpcprm(RPCPARAMDATA * pdata, char *optarg)
 	memset(rpcprm, 0, sizeof(*rpcprm));
 	pdata->params[pdata->paramslen-1] = rpcprm;
 
-	/* TODO: type & output */
+	/* TODO: output */
+	rpcprm->type = pdata->paramtype ? pdata->paramtype : RPCRPM_DEFAULTTYPE;
 	if (pdata->paramname) {
 		rpcprm->name = pdata->paramname;
 		pdata->paramname = NULL;
@@ -258,8 +354,40 @@ process_parameter_rpcprm(RPCPARAMDATA * pdata, char *optarg)
 		return TRUE;
 	}
 
-	rpcprm->type = SQLCHAR;
-	rpcprm->value = (BYTE *)strdup(optarg);
+	/* convert non-text data */
+	/* TODO: parse date ... */
+	switch(get_datatype(rpcprm->type)) {
+		case DATATYPE_LONG: {
+			int64_t *tmp;
+			double mny;
+			tmp = malloc(sizeof(*tmp));
+			if (rpcprm->type == SYBMONEY || rpcprm->type == SYBMONEY4) {
+				mny = atof(optarg);
+				*tmp = (int64_t)(mny * 10000);
+			} else {
+#ifdef WIN32
+				*tmp = _atoi64(optarg);
+#else
+				*tmp = atoll(optarg);
+#endif
+			}
+			rpcprm->value = (BYTE *)tmp;
+			break;
+		}
+		case DATATYPE_DOUBLE: {
+			double *tmp;
+			tmp = malloc(sizeof(*tmp));
+			*tmp = atof(optarg);
+			rpcprm->value = (BYTE *)tmp;
+			break;
+		}
+		case DATATYPE_STR: {
+			rpcprm->value = (BYTE *)(strdup(optarg));
+			break;
+		}
+		default:
+			fprintf(stderr, "Internal error: missing datatype %d\n", get_datatype(rpcprm->type));
+	}
 
 	return TRUE;
 }
@@ -276,6 +404,8 @@ free_parameters(RPCPARAMDATA * pdata)
 	for (i=0; i<pdata->paramslen; i++) {
 		RPCPRMPARAMDATA *rpcprm;
 		rpcprm = pdata->params[i];
+		if (rpcprm->value)
+			free(rpcprm->value);
 		if (rpcprm->name)
 			free(rpcprm->name);
 		free(rpcprm);
@@ -367,14 +497,26 @@ print_input_debug(RPCPARAMDATA * pdata, DBPROCESS * dbproc)
 	for (i=0; i<pdata->paramslen; i++) {
 		rpcprm = pdata->params[i];
 		printf(
-			"%3d %s: type x%x, out %d, value %s\n",
+			"%3d %s: type x%x, out %d, value ",
 			i,
 			rpcprm->name,
 			rpcprm->type,
-			rpcprm->output,
-			/* FIXME: typed ... */
-			(char *)rpcprm->value
+			rpcprm->output
 		);
+		if (rpcprm->value == NULL) {
+			printf("(null)\n");
+			continue;
+		}
+		switch(get_datatype(rpcprm->type)) {
+			case DATATYPE_LONG:
+				printf("(long) %lld\n", *((long long *)rpcprm->value));
+				break;
+			case DATATYPE_DOUBLE:
+				printf("(double) %f\n", *((double *)rpcprm->value));
+				break;
+			default:
+				printf("(char*) %s\n", (char *)rpcprm->value);
+		}
 	}
 
 	return TRUE;
@@ -497,11 +639,12 @@ do_rpc(RPCPARAMDATA * pdata, DBPROCESS * dbproc)
 	/* rpc bind: ->params */
 	for (i=0; i<pdata->paramslen; i++) {
 		rpcprm = pdata->params[i];
-		datalen = (int)strlen((char *)rpcprm->value);
+		maxlen = datalen = -1;
 		status = 0;
-		maxlen = -1;
 		if (rpcprm->value == NULL) {
 			datalen = 0;
+		} else if (DATATYPE_STR == get_datatype(rpcprm->type)) {
+			datalen = (int)strlen((char *)rpcprm->value);
 		}
 		/* TODO: outputs */
 		if (rpcprm->output) {
@@ -609,13 +752,16 @@ void
 pusage(void)
 {
 	fprintf(stderr, "usage:  freerpc procedure\n");
-	fprintf(stderr, "        [-n name] [-N] [-p param1]\n");
+	fprintf(stderr, "        [-n name] [-t type] [-N] [-p param1]\n");
 	fprintf(stderr, "        [-n name] [-p paramN]\n");
 	fprintf(stderr, "        [-U username] [-P password] [-I interfaces_file] [-S server] [-D database]\n");
 	fprintf(stderr, "        [-v] [-d] [-O \"set connection_option on|off, ...]\"\n");
 	fprintf(stderr, "        [-A packet size] [-T text or image size]\n");
 	fprintf(stderr, "        \n");
 	fprintf(stderr, "example: freerpc sp_help -p sp_help -S mssql -U guest -P password\n");
+	fprintf(stderr, "         freerpc sp_executesql -S mssql \\\n");
+	fprintf(stderr, "         -t ntext -p \"select @a\" -p \"@a char(4)\" \\\n");
+	fprintf(stderr, "         -n @a -t char -p test\n");
 }
 
 int
@@ -656,4 +802,18 @@ msg_handler(DBPROCESS * dbproc, DBINT msgno, int msgstate, int severity, char *m
 	fprintf(stderr, "\n\t%s\n", msgtext);
 
 	return (0);
+}
+
+char *
+to_uppercase(char *s)
+{
+	int i = 0;
+	char *str = strdup(s);
+
+	while (str[i]) {
+		if (str[i] >= 97 && str[i] <= 122)
+			str[i] -= 32;
+		i++;
+	}
+	return (str);
 }

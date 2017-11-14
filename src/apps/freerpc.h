@@ -1,3 +1,16 @@
+#define RPCRPM_DEFAULTTYPE SYBVARCHAR
+
+enum datatype {
+	DATATYPE_STR,
+	DATATYPE_LONG,
+	DATATYPE_DOUBLE
+};
+
+typedef struct keyval {
+	const char* key;
+	int value;
+} RPCKEYVAL;
+
 typedef struct prmpd
 {
 	char *name;
@@ -13,6 +26,7 @@ typedef struct pd
 	RPCPRMPARAMDATA **params;
 	int paramslen;
 	char *paramname;
+	int paramtype;
 	int paramnull;
 	char *interfacesfile;
 	int textsize;
