@@ -70,6 +70,7 @@ int login_to_database(struct pd *, DBPROCESS **);
 
 int print_input_debug(RPCPARAMDATA * pdata, DBPROCESS * dbproc);
 int print_columns(RPCPARAMDATA * pdata, DBPROCESS * dbproc);
+int print_column_or_return_name(DBPROCESS * dbproc, int colno, int is_ret);
 int print_column_or_return(RPCPARAMDATA * pdata, DBPROCESS * dbproc, int colno, int is_ret);
 int print_row(RPCPARAMDATA * pdata, DBPROCESS * dbproc, int num_cols);
 int print_returns(RPCPARAMDATA * pdata, DBPROCESS * dbproc);
@@ -147,7 +148,7 @@ process_parameters(int argc, char **argv, RPCPARAMDATA *pdata)
 	 * Get the rest of the arguments
 	 */
 	optind = 2; /* start processing options after spname */
-	while ((ch = getopt(argc, argv, "p:U:P:I:S:T:A:O:0:C:dvVD:")) != -1) {
+	while ((ch = getopt(argc, argv, "p:n:U:P:I:S:T:A:O:0:C:dvVD:")) != -1) {
 		switch (ch) {
 		case 'v':
 		case 'V':
@@ -159,6 +160,11 @@ process_parameters(int argc, char **argv, RPCPARAMDATA *pdata)
 			break;
 		case 'p':
 			process_parameter_rpcprm(pdata, optarg);
+			break;
+		case 'n':
+			free(pdata->paramname);
+			pdata->paramname = strdup(optarg);
+			break;
 			break;
 		case 'U':
 			pdata->Uflag++;
@@ -234,10 +240,16 @@ process_parameter_rpcprm(RPCPARAMDATA * pdata, char *optarg)
 		pdata->params = realloc(pdata->params, pdata->paramslen * sizeof(RPCPRMPARAMDATA*));
 	}
 
-	/* TODO: name/num & type */
 	rpcprm = malloc(sizeof(RPCPRMPARAMDATA));
 	memset(rpcprm, 0, sizeof(*rpcprm));
 	pdata->params[pdata->paramslen-1] = rpcprm;
+
+	/* TODO: type & output */
+	if (pdata->paramname) {
+		rpcprm->name = pdata->paramname;
+		pdata->paramname = NULL;
+	}
+
 	rpcprm->type = SQLCHAR;
 	rpcprm->value = (BYTE *)strdup(optarg);
 
@@ -254,7 +266,11 @@ free_parameters(RPCPARAMDATA * pdata)
 	}
 
 	for (i=0; i<pdata->paramslen; i++) {
-		free(pdata->params[i]);
+		RPCPRMPARAMDATA *rpcprm;
+		rpcprm = pdata->params[i];
+		if (rpcprm->name)
+			free(rpcprm->name);
+		free(rpcprm);
 	}
 
 	free(pdata->params);
@@ -361,19 +377,31 @@ print_columns(RPCPARAMDATA * pdata, DBPROCESS * dbproc)
 {
 	int num_cols = dbnumcols(dbproc);
 	int i;
-	char *name;
 
 	for (i=1; i<=num_cols; i++) {
-		name = (char*)dbcolname(dbproc, i);
-		if (strlen(name)) {
-			printf("%s", name);
-		} else {
-			printf("[%d]", i);
-		}
+		print_column_or_return_name(dbproc, i, 0);
 		printf(i == num_cols ? "\n" : "\t");
 	}
 
 	return num_cols;
+}
+
+int
+print_column_or_return_name(DBPROCESS * dbproc, int colno, int is_ret)
+{
+	char * name;
+
+	if (is_ret)
+		name = (char*)dbretname(dbproc, colno);
+	else
+		name = (char*)dbcolname(dbproc, colno);
+
+	if (strlen(name))
+		printf("%s", name);
+	else
+		printf("[%d]", colno);
+
+	return TRUE;
 }
 
 int
@@ -430,7 +458,8 @@ print_returns(RPCPARAMDATA * pdata, DBPROCESS * dbproc)
 	int i;
 
 	for (i=1; i<=num_rets; i++) {
-		printf("%s: ",(char*)dbretname(dbproc, i));
+		print_column_or_return_name(dbproc, i, 1);
+		printf(": ");
 		print_column_or_return(pdata, dbproc, i, 1);
 		printf("\n");
 	}
@@ -475,14 +504,14 @@ do_rpc(RPCPARAMDATA * pdata, DBPROCESS * dbproc)
 		}
 	}
 
-	/* for now  rpcprms are unused after that */
-	free_parameters(pdata);
-
 	/* rpc send */
 	if (dbrpcsend(dbproc) == FAIL) {
 		fprintf(stderr, "dbrpcsend failed\n");
 		return FALSE;
 	}
+
+	/* for now, rpcprms are unused after that */
+	free_parameters(pdata);
 
 	/* fetch & print results */
 	while (SUCCEED == (ret_code = dbresults(dbproc))) {
@@ -568,12 +597,14 @@ setoptions(DBPROCESS * dbproc, RPCPARAMDATA * params)
 void
 pusage(void)
 {
-	fprintf(stderr, "usage:  freerpc procedure [param1..paramN]\n");
+	fprintf(stderr, "usage:  freerpc procedure\n");
+	fprintf(stderr, "        [-n name] [-p param1]\n");
+	fprintf(stderr, "        [-n name] [-p paramN]\n");
 	fprintf(stderr, "        [-U username] [-P password] [-I interfaces_file] [-S server] [-D database]\n");
 	fprintf(stderr, "        [-v] [-d] [-O \"set connection_option on|off, ...]\"\n");
 	fprintf(stderr, "        [-A packet size] [-T text or image size]\n");
 	fprintf(stderr, "        \n");
-	fprintf(stderr, "example: freerpc sp_help sp_help -S mssql -U guest -P password\n");
+	fprintf(stderr, "example: freerpc sp_help -p sp_help -S mssql -U guest -P password\n");
 }
 
 int
