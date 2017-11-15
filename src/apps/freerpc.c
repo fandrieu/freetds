@@ -154,12 +154,10 @@ process_parameters(int argc, char **argv, RPCPARAMDATA *pdata)
 	 * Get the rest of the arguments
 	 */
 	optind = 2; /* start processing options after spname */
-	while ((ch = getopt(argc, argv, "p:n:ft:oNU:P:I:S:T:A:O:0:C:dvVD:")) != -1) {
+	while ((ch = getopt(argc, argv, "p:n:ft:oNU:P:I:S:T:A:V:O:0:C:dvD:")) != -1) {
 		switch (ch) {
 		case 'v':
-		case 'V':
-			printf("freerpc version %s\n", TDS_VERSION_NO);
-			return FALSE;
+			pdata->verbose++;
 			break;
 		case 'd':
 			tdsdump_open(NULL);
@@ -219,6 +217,9 @@ process_parameters(int argc, char **argv, RPCPARAMDATA *pdata)
 			break;
 		case 'C':
 			pdata->charset = strdup(optarg);
+			break;
+		case 'V':
+			pdata->version = strdup(optarg);
 			break;
 		case '?':
 		default:
@@ -444,6 +445,20 @@ login_to_database(RPCPARAMDATA * pdata, DBPROCESS ** pdbproc)
 {
 	LOGINREC *login;
 
+	const RPCKEYVAL versions[] = {
+		{"4.2", DBVERSION_42},
+		{"4.6", DBVERSION_46},
+		{"7.0", DBVERSION_70},
+		{"7.1", DBVERSION_71},
+		{"7.2", DBVERSION_72},
+		{"7.3", DBVERSION_73},
+		{"7.4", DBVERSION_74},
+		{"10.0", DBVERSION_100},
+		{"auto", 0}
+	};
+	int versionslen = sizeof(versions)/sizeof(versions[0]);
+	int i;
+
 	/* Initialize DB-Library. */
 
 	if (dbinit() == FAIL)
@@ -488,6 +503,14 @@ login_to_database(RPCPARAMDATA * pdata, DBPROCESS ** pdbproc)
 	if (pdata->dbname)
 		DBSETLDBNAME(login, pdata->dbname);
 
+	if (pdata->version) {
+		for(i=0; i<versionslen; i++) {
+			if(strcmp(pdata->version, versions[i].key) == 0) {
+				DBSETLVERSION(login, versions[i].value);
+				break;
+			}
+		}
+	}
 	/*
 	 * Get a connection to the database.
 	 */
@@ -509,17 +532,36 @@ print_input_debug(RPCPARAMDATA * pdata, DBPROCESS * dbproc)
 	int i;
 	RPCPRMPARAMDATA *rpcprm;
 
-	printf("exec %s", pdata->spname);
+	const RPCKEYVAL versions[] = {
+		{"UNKNOWN", DBTDS_UNKNOWN},
+		{"2.0", DBTDS_2_0},
+		{"3.4", DBTDS_3_4},
+		{"4.0", DBTDS_4_0},
+		{"4.2", DBTDS_4_2},
+		{"4.6", DBTDS_4_6},
+		{"4.9", DBTDS_4_9_5},
+		{"5.0", DBTDS_5_0},
+		{"7.0", DBTDS_7_0},
+		{"7.1", DBTDS_7_1},
+		{"7.2", DBTDS_7_2},
+		{"7.3", DBTDS_7_3},
+		{"7.4", DBTDS_7_4}
+	};
+	int versionslen = sizeof(versions)/sizeof(versions[0]);
+	int verint;
+	const char *vertext = "ERROR";
 
+	fprintf(stderr, "exec %s", pdata->spname);
 	if (!pdata->paramslen) {
-		printf("\n");
+		fprintf(stderr, "\n");
 		return TRUE;
 	}
 
-	printf(", params:\n");
+	fprintf(stderr, ", params:\n");
 	for (i=0; i<pdata->paramslen; i++) {
 		rpcprm = pdata->params[i];
-		printf(
+		fprintf(
+			stderr,
 			"%3d %s: type x%x, out %d, value ",
 			i,
 			rpcprm->name,
@@ -527,24 +569,33 @@ print_input_debug(RPCPARAMDATA * pdata, DBPROCESS * dbproc)
 			rpcprm->output
 		);
 		if (rpcprm->value == NULL) {
-			printf("(null)\n");
+			fprintf(stderr, "(null)\n");
 			continue;
 		}
 		switch(get_datatype(rpcprm->type)) {
 			case DATATYPE_LONG:
-				printf("(long) %lld\n", *((long long *)rpcprm->value));
+				fprintf(stderr, "(long) %lld\n", *((long long *)rpcprm->value));
 				break;
 			case DATATYPE_DOUBLE:
-				printf("(double) %f\n", *((double *)rpcprm->value));
+				fprintf(stderr, "(double) %f\n", *((double *)rpcprm->value));
 				break;
 			default:
 				if (rpcprm->file) {
-					printf("(file) %d %s\n", rpcprm->strlen, rpcprm->file);
+					fprintf(stderr, "(file) %d %s\n", rpcprm->strlen, rpcprm->file);
 				} else {
-					printf("(char*) %d %s\n", rpcprm->strlen, (char *)rpcprm->value);
+					fprintf(stderr, "(char*) %d %s\n", rpcprm->strlen, (char *)rpcprm->value);
 				}
 		}
 	}
+
+	verint = dbtds(dbproc);
+	for(i=0; i<versionslen; i++) {
+		if(verint == versions[i].value) {
+			vertext = versions[i].key;
+		}
+	}
+
+	fprintf(stderr, "tds version %s (%d), %s\n", vertext, verint, TDS_VERSION_NO);
 
 	return TRUE;
 }
@@ -653,7 +704,9 @@ do_rpc(RPCPARAMDATA * pdata, DBPROCESS * dbproc)
 	int i, datalen, status;
 	long maxlen;
 
-	print_input_debug(pdata, dbproc);
+	if (pdata->verbose) {
+		print_input_debug(pdata, dbproc);
+	}
 
 	/* rpc init: ->spname */
 	if (FAIL == dbrpcinit(dbproc, pdata->spname, 0)) {

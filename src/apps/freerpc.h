@@ -34,12 +34,14 @@ typedef struct pd
 	int paramnull;
 	char *interfacesfile;
 	int textsize;
+	int verbose;
 	char *user;
 	char *pass;
 	char *server;
 	char *dbname;
 	char *options;
 	char *charset;
+	char *version;
 	int packetsize;
 	int Uflag;
 	int Iflag;
