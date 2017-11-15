@@ -62,36 +62,45 @@
 #include <sybdb.h>
 #include "freerpc.h"
 
-void pusage(void);
-int process_parameters(int, char **, struct pd *);
-enum datatype get_datatype(int type);
-int process_parameter_rpctype(RPCPARAMDATA * pdata, char *optarg);
-int process_parameter_rpcprm(RPCPARAMDATA * pdata, char *optarg);
-int free_parameters(RPCPARAMDATA * pdata);
-int login_to_database(struct pd *, DBPROCESS **);
+static int process_parameters(int argc, char **argv, RPCDATA *data, RPCLOGIN *login, RPCPARAMOPTS *paramopts);
+static enum rpc_datatype get_datatype(int type);
+static int process_parameter_rpctype(RPCPARAMOPTS *paramopts, char *optarg);
+static int process_parameter_rpcparam(RPCDATA *data, RPCPARAMOPTS *paramopts, char *optarg);
+static int login_to_database(DBPROCESS **pdbproc, RPCLOGIN *login);
+static int set_login_options(DBPROCESS *dbproc, char *options, int textsize);
+static void print_usage(void);
 
-int print_input_debug(RPCPARAMDATA * pdata, DBPROCESS * dbproc);
-int print_columns(RPCPARAMDATA * pdata, DBPROCESS * dbproc);
-int print_column_or_return(RPCPARAMDATA * pdata, DBPROCESS * dbproc, int colno, int is_ret, char *to_file);
-int print_row(RPCPARAMDATA * pdata, DBPROCESS * dbproc, int num_cols);
-int print_returns(RPCPARAMDATA * pdata, DBPROCESS * dbproc);
-int do_rpc(RPCPARAMDATA * pdata, DBPROCESS * dbproc);
-int setoptions (DBPROCESS * dbproc, RPCPARAMDATA * params);
+static int print_input_debug(DBPROCESS *dbproc, RPCDATA *data);
+static int print_columns(DBPROCESS *dbproc);
+static int print_column_or_return(DBPROCESS *dbproc, int colno, int is_ret, char *to_file);
+static int print_row(DBPROCESS *dbproc, int num_cols);
+static int print_returns(DBPROCESS * dbproc, RPCDATA *data);
+static int rpc_main(DBPROCESS * dbproc, RPCDATA *data);
 
-int err_handler(DBPROCESS * dbproc, int severity, int dberr, int oserr, char *dberrstr, char *oserrstr);
-int msg_handler(DBPROCESS * dbproc, DBINT msgno, int msgstate, int severity, char *msgtext, char *srvname, char *procname,
-		int line);
+static int err_handler(DBPROCESS *dbproc, int severity, int dberr, int oserr, char *dberrstr, char *oserrstr);
+static int msg_handler(DBPROCESS *dbproc, DBINT msgno, int msgstate, int severity, char *msgtext, char *srvname,
+	char *procname, int line);
 
-int read_file(char *name, BYTE **pbuf, int *plen, int maxlen);
-int write_file(char *name, char *buf, long len);
-char *to_uppercase(char *s);
+static void *xmalloc(size_t s);
+static void *xcalloc(size_t s);
+static void *xrealloc(void *p, size_t s);
+static int free_paramopts(RPCPARAMOPTS *paramopts);
+static int free_login(RPCLOGIN *login);
+static int free_data(RPCDATA *data);
+static int free_data_paramsvalue(RPCDATA *data);
+
+static char *to_uppercase(char *s);
+static int read_file(char *name, BYTE **pbuf, int *plen, int maxlen);
+static int write_file(char *name, char *buf, long len);
 #define PRINT_NAME_OR_NUM(name, num) name && strlen(name) ? printf("%s", name) : printf("[%d]", num)
 
 int
 main(int argc, char **argv)
 {
-	RPCPARAMDATA params;
-	DBPROCESS *dbproc;
+	DBPROCESS *dbproc = NULL;
+	RPCDATA *data = xcalloc(sizeof(RPCDATA));
+	RPCLOGIN *login = xcalloc(sizeof(RPCLOGIN));
+	RPCPARAMOPTS *paramopts = xcalloc(sizeof(RPCPARAMOPTS));
 	int ok = 0;
 
 	setlocale(LC_ALL, "");
@@ -101,37 +110,37 @@ main(int argc, char **argv)
 	parse_vms_args(&argc, &argv);
 #endif
 
-	memset(&params, '\0', sizeof(params));
+	data->textsize = 2147483647;	/* our default text size is the LARGEST */
 
-	params.textsize = 2147483647;	/* our default text size is the LARGEST */
-
-	if (process_parameters(argc, argv, &params) == FALSE) {
-		goto cleanup;
-	}
-	if (getenv("FREERPC")) {
-		fprintf(stderr, "User name: \"%s\"\n", params.user);
-	}
-
-
-	if (login_to_database(&params, &dbproc) == FALSE) {
+	if (process_parameters(argc, argv, data, login, paramopts) == FALSE) {
 		goto cleanup;
 	}
 
-	if (setoptions(dbproc, &params) == FALSE) {
+	if (login_to_database(&dbproc, login) == FALSE) {
+		goto cleanup;
+	}
+	if (set_login_options(dbproc, login->options, data->textsize) == FALSE) {
 		goto cleanup;
 	}
 
-	ok = do_rpc(&params, dbproc);
+	
+	ok = rpc_main(dbproc, data);
 
 cleanup:
-	free_parameters(&params);
+	if (dbproc) {
+		dbclose(dbproc);
+	}
+	free_paramopts(paramopts);
+	free_login(login);
+	free_data(data);
 	exit(ok ? EXIT_SUCCESS : EXIT_FAILURE);
 
 	return 0;
 }
 
-int
-process_parameters(int argc, char **argv, RPCPARAMDATA *pdata)
+static int
+process_parameters(int argc, char **argv, RPCDATA *data,
+	RPCLOGIN *login, RPCPARAMOPTS *paramopts)
 {
 	extern char *optarg;
 	extern int optind;
@@ -139,13 +148,13 @@ process_parameters(int argc, char **argv, RPCPARAMDATA *pdata)
 
 	int ch;
 	if (argc < 2) {
-		pusage();
+		print_usage();
 		return (FALSE);
 	}
 
 	/* argument 1 - the stored procedure name */
-	pdata->spname = strdup(argv[1]);
-	if (pdata->spname == NULL) {
+	data->spname = strdup(argv[1]);
+	if (data->spname == NULL) {
 		fprintf(stderr, "Out of memory!\n");
 		return FALSE;
 	}
@@ -156,74 +165,71 @@ process_parameters(int argc, char **argv, RPCPARAMDATA *pdata)
 	optind = 2; /* start processing options after spname */
 	while ((ch = getopt(argc, argv, "p:n:ft:oNU:P:I:S:T:A:V:O:0:C:dvD:")) != -1) {
 		switch (ch) {
+		/* global */
 		case 'v':
-			pdata->verbose++;
+			data->verbose++;
 			break;
 		case 'd':
 			tdsdump_open(NULL);
 			break;
+		case 'T':
+			data->textsize = atoi(optarg);
+			break;
+		/* rpc params */
 		case 'p':
-			if (!process_parameter_rpcprm(pdata, optarg))
+			if (!process_parameter_rpcparam(data, paramopts, optarg))
 				return FALSE;
 			break;
 		case 't':
-			if (!process_parameter_rpctype(pdata, optarg))
+			if (!process_parameter_rpctype(paramopts, optarg))
 				return FALSE;
 			break;
 		case 'N':
-			pdata->paramnull = 1;
+			paramopts->null = 1;
 			break;
 		case 'n':
-			free(pdata->paramname);
-			pdata->paramname = strdup(optarg);
+			free(paramopts->name);
+			paramopts->name = strdup(optarg);
 			break;
 		case 'f':
-			pdata->paramfile = 1;
+			paramopts->file = 1;
 			break;
 		case 'o':
-			pdata->paramoutput = 1;
+			paramopts->output = 1;
 			break;
+		/* login */
 		case 'U':
-			pdata->Uflag++;
-			pdata->user = strdup(optarg);
+			login->user = strdup(optarg);
 			break;
 		case 'P':
-			pdata->Pflag++;
-			pdata->pass = tds_getpassarg(optarg);
+			login->pass = tds_getpassarg(optarg);
 			break;
 		case 'I':
-			pdata->Iflag++;
-			free(pdata->interfacesfile);
-			pdata->interfacesfile = strdup(optarg);
+			free(login->interfacesfile);
+			login->interfacesfile = strdup(optarg);
 			break;
 		case 'S':
-			pdata->Sflag++;
-			pdata->server = strdup(optarg);
+			login->server = strdup(optarg);
 			break;
 		case 'D':
-			pdata->dbname = strdup(optarg);
+			login->dbname = strdup(optarg);
 			break;
 		case 'O':
 		case '0':
-			pdata->options = strdup(optarg);
-			break;
-		case 'T':
-			pdata->Tflag++;
-			pdata->textsize = atoi(optarg);
+			login->options = strdup(optarg);
 			break;
 		case 'A':
-			pdata->Aflag++;
-			pdata->packetsize = atoi(optarg);
+			login->packetsize = atoi(optarg);
 			break;
 		case 'C':
-			pdata->charset = strdup(optarg);
+			login->charset = strdup(optarg);
 			break;
 		case 'V':
-			pdata->version = strdup(optarg);
+			login->version = strdup(optarg);
 			break;
 		case '?':
 		default:
-			pusage();
+			print_usage();
 			return (FALSE);
 		}
 	}
@@ -232,12 +238,9 @@ process_parameters(int argc, char **argv, RPCPARAMDATA *pdata)
 	 * Check for required/disallowed option combinations
 	 * If no username is provided, rely on domain login.
 	 */
-
-	/* Server */
-	if (!pdata->Sflag) {
-		if ((pdata->server = getenv("DSQUERY")) != NULL) {
-			pdata->server = strdup(pdata->server);	/* can be freed */
-			pdata->Sflag++;
+	if (!login->server) {
+		if ((login->server = getenv("DSQUERY")) != NULL) {
+			login->server = strdup(login->server);	/* can be freed */
 		} else {
 			fprintf(stderr, "-S must be supplied.\n");
 			return (FALSE);
@@ -248,7 +251,7 @@ process_parameters(int argc, char **argv, RPCPARAMDATA *pdata)
 }
 
 /* NOTE: don't use FreeTDS internal macros on purpose */
-enum datatype
+static enum rpc_datatype
 get_datatype(int type) {
 	switch(type) {
 		case SYBINT1:
@@ -269,16 +272,16 @@ get_datatype(int type) {
 	}
 }
 
-int
-process_parameter_rpctype(RPCPARAMDATA * pdata, char *optarg)
+static int
+process_parameter_rpctype(RPCPARAMOPTS *paramopts, char *optarg)
 {
 	char *s = to_uppercase(optarg);
 	int type = 0, i;
 
 	/* enable all for testing purposes... */
 	const RPCKEYVAL types[] = {
-		{"DEFAULT", RPCRPM_DEFAULTTYPE},
-		{"0", RPCRPM_DEFAULTTYPE},
+		{"DEFAULT", RPCPARAM_DEFAULTTYPE},
+		{"0", RPCPARAM_DEFAULTTYPE},
 		{"CHAR", SYBCHAR},
 		{"VARCHAR", SYBVARCHAR},
 		/* {"INTN", SYBINTN},	needs len */
@@ -326,63 +329,62 @@ process_parameter_rpctype(RPCPARAMDATA * pdata, char *optarg)
 	free(s);
 	if (!type) {
 		fprintf(stderr, "Unsupported rpc param type %s\n", optarg);
-		pdata->paramtype = RPCRPM_DEFAULTTYPE;
+		paramopts->type = RPCPARAM_DEFAULTTYPE;
 		return FALSE;
 	}
 
-	pdata->paramtype = type;
+	paramopts->type = type;
 	return TRUE;
 }
 
-int
-process_parameter_rpcprm(RPCPARAMDATA * pdata, char *optarg)
+static int
+process_parameter_rpcparam(RPCDATA *data, RPCPARAMOPTS *paramopts, char *optarg)
 {
-	RPCPRMPARAMDATA *rpcprm;
+	RPCPARAM *param;
 
-	if (!pdata->paramslen) {
-		pdata->paramslen = 1;
-		pdata->params = malloc(sizeof(RPCPRMPARAMDATA*));
+	if (!data->paramslen) {
+		data->paramslen = 1;
+		data->params = xmalloc(sizeof(RPCPARAM*));
 	} else {
-		pdata->paramslen++;
-		pdata->params = realloc(pdata->params, pdata->paramslen * sizeof(RPCPRMPARAMDATA*));
+		data->paramslen++;
+		data->params = xrealloc(data->params, data->paramslen * sizeof(RPCPARAM*));
 	}
 
-	rpcprm = malloc(sizeof(RPCPRMPARAMDATA));
-	memset(rpcprm, 0, sizeof(*rpcprm));
-	pdata->params[pdata->paramslen-1] = rpcprm;
+	param = xcalloc(sizeof(RPCPARAM));
+	data->params[data->paramslen-1] = param;
 
-	rpcprm->type = pdata->paramtype ? pdata->paramtype : RPCRPM_DEFAULTTYPE;
-	if (pdata->paramname) {
-		rpcprm->name = pdata->paramname;
-		pdata->paramname = NULL;
+	param->type = paramopts->type ? paramopts->type : RPCPARAM_DEFAULTTYPE;
+	if (paramopts->name) {
+		param->name = paramopts->name;
+		paramopts->name = NULL;
 	}
-	if (pdata->paramoutput) {
-		rpcprm->output = pdata->paramoutput;
-		pdata->paramoutput = 0;
+	if (paramopts->output) {
+		param->output = paramopts->output;
+		paramopts->output = 0;
 	}
-	if (pdata->paramfile) {
-		rpcprm->file = strdup(optarg);
-		pdata->paramfile = 0;
+	if (paramopts->file) {
+		param->file = strdup(optarg);
+		paramopts->file = 0;
 	}
-	if (pdata->paramnull) {
-		pdata->paramnull = 0;
+	if (paramopts->null) {
+		paramopts->null = 0;
 
 		return TRUE;
 	}
 
 	/* read raw data from file */
-	if (rpcprm->file) {
-		return read_file(rpcprm->file, &(rpcprm->value), &(rpcprm->strlen), pdata->textsize);
+	if (param->file) {
+		return read_file(param->file, &(param->value), &(param->strlen), data->textsize);
 	}
 
 	/* convert non-text data */
 	/* TODO: parse date ... */
-	switch(get_datatype(rpcprm->type)) {
+	switch(get_datatype(param->type)) {
 		case DATATYPE_LONG: {
 			int64_t *tmp;
 			double mny;
-			tmp = malloc(sizeof(*tmp));
-			if (rpcprm->type == SYBMONEY || rpcprm->type == SYBMONEY4) {
+			tmp = xmalloc(sizeof(*tmp));
+			if (param->type == SYBMONEY || param->type == SYBMONEY4) {
 				mny = atof(optarg);
 				*tmp = (int64_t)(mny * 10000);
 			} else {
@@ -392,58 +394,32 @@ process_parameter_rpcprm(RPCPARAMDATA * pdata, char *optarg)
 				*tmp = atoll(optarg);
 #endif
 			}
-			rpcprm->value = (BYTE *)tmp;
+			param->value = (BYTE *)tmp;
 			break;
 		}
 		case DATATYPE_DOUBLE: {
 			double *tmp;
-			tmp = malloc(sizeof(*tmp));
+			tmp = xmalloc(sizeof(*tmp));
 			*tmp = atof(optarg);
-			rpcprm->value = (BYTE *)tmp;
+			param->value = (BYTE *)tmp;
 			break;
 		}
 		case DATATYPE_STR: {
-			rpcprm->value = (BYTE *)(strdup(optarg));
-			rpcprm->strlen = (int)strlen(optarg);
+			param->value = (BYTE *)(strdup(optarg));
+			param->strlen = (int)strlen(optarg);
 			break;
 		}
 		default:
-			fprintf(stderr, "Internal error: missing datatype %d\n", get_datatype(rpcprm->type));
+			fprintf(stderr, "Internal error: missing datatype %d\n", get_datatype(param->type));
 	}
 
 	return TRUE;
 }
 
-int
-free_parameters(RPCPARAMDATA * pdata)
+static int
+login_to_database(DBPROCESS **pdbproc, RPCLOGIN *login)
 {
-	int i;
-
-	if (!pdata->paramslen) {
-		return TRUE;
-	}
-
-	for (i=0; i<pdata->paramslen; i++) {
-		RPCPRMPARAMDATA *rpcprm;
-		rpcprm = pdata->params[i];
-		if (rpcprm->value)
-			free(rpcprm->value);
-		if (rpcprm->file)
-			free(rpcprm->file);
-		if (rpcprm->name)
-			free(rpcprm->name);
-		free(rpcprm);
-	}
-
-	free(pdata->params);
-	pdata->paramslen = 0;
-	return TRUE;
-}
-
-int
-login_to_database(RPCPARAMDATA * pdata, DBPROCESS ** pdbproc)
-{
-	LOGINREC *login;
+	LOGINREC *loginrec;
 
 	const RPCKEYVAL versions[] = {
 		{"4.2", DBVERSION_42},
@@ -473,40 +449,40 @@ login_to_database(RPCPARAMDATA * pdata, DBPROCESS ** pdbproc)
 	dbmsghandle(msg_handler);
 
 	/* If the interfaces file was specified explicitly, set it. */
-	if (pdata->interfacesfile != NULL)
-		dbsetifile(pdata->interfacesfile);
+	if (login->interfacesfile != NULL)
+		dbsetifile(login->interfacesfile);
 
 	/*
 	 * Allocate and initialize the LOGINREC structure to be used
 	 * to open a connection to SQL Server.
 	 */
 
-	login = dblogin();
-	if (!login)
+	loginrec = dblogin();
+	if (!loginrec)
 		return FALSE;
 
-	if (pdata->user)
-		DBSETLUSER(login, pdata->user);
-	if (pdata->pass) {
-		DBSETLPWD(login, pdata->pass);
-		memset(pdata->pass, 0, strlen(pdata->pass));
+	if (login->user)
+		DBSETLUSER(loginrec, login->user);
+	if (login->pass) {
+		DBSETLPWD(loginrec, login->pass);
+		memset(login->pass, 0, strlen(login->pass));
 	}
 
-	DBSETLAPP(login, "FreeRPC");
-	if (pdata->charset)
-		DBSETLCHARSET(login, pdata->charset);
+	DBSETLAPP(loginrec, "FreeRPC");
+	if (login->charset)
+		DBSETLCHARSET(loginrec, login->charset);
 
-	if (pdata->Aflag && pdata->packetsize > 0) {
-		DBSETLPACKET(login, pdata->packetsize);
+	if (login->packetsize && login->packetsize > 0) {
+		DBSETLPACKET(loginrec, login->packetsize);
 	}
 
-	if (pdata->dbname)
-		DBSETLDBNAME(login, pdata->dbname);
+	if (login->dbname)
+		DBSETLDBNAME(loginrec, login->dbname);
 
-	if (pdata->version) {
+	if (login->version) {
 		for(i=0; i<versionslen; i++) {
-			if(strcmp(pdata->version, versions[i].key) == 0) {
-				DBSETLVERSION(login, versions[i].value);
+			if(strcmp(login->version, versions[i].key) == 0) {
+				DBSETLVERSION(loginrec, versions[i].value);
 				break;
 			}
 		}
@@ -515,22 +491,22 @@ login_to_database(RPCPARAMDATA * pdata, DBPROCESS ** pdbproc)
 	 * Get a connection to the database.
 	 */
 
-	if ((*pdbproc = dbopen(login, pdata->server)) == NULL) {
-		fprintf(stderr, "Can't connect to server \"%s\".\n", pdata->server);
-		dbloginfree(login);
+	if ((*pdbproc = dbopen(loginrec, login->server)) == NULL) {
+		fprintf(stderr, "Can't connect to server \"%s\".\n", login->server);
+		dbloginfree(loginrec);
 		return (FALSE);
 	}
-	dbloginfree(login);
-	login = NULL;
+	dbloginfree(loginrec);
+	loginrec = NULL;
 
 	return (TRUE);
 }
 
-int
-print_input_debug(RPCPARAMDATA * pdata, DBPROCESS * dbproc)
+static int
+print_input_debug(DBPROCESS *dbproc, RPCDATA *data)
 {
 	int i;
-	RPCPRMPARAMDATA *rpcprm;
+	RPCPARAM *param;
 
 	const RPCKEYVAL versions[] = {
 		{"UNKNOWN", DBTDS_UNKNOWN},
@@ -551,39 +527,39 @@ print_input_debug(RPCPARAMDATA * pdata, DBPROCESS * dbproc)
 	int verint;
 	const char *vertext = "ERROR";
 
-	fprintf(stderr, "exec %s", pdata->spname);
-	if (!pdata->paramslen) {
+	fprintf(stderr, "exec %s", data->spname);
+	if (!data->paramslen) {
 		fprintf(stderr, "\n");
 		return TRUE;
 	}
 
 	fprintf(stderr, ", params:\n");
-	for (i=0; i<pdata->paramslen; i++) {
-		rpcprm = pdata->params[i];
+	for (i=0; i<data->paramslen; i++) {
+		param = data->params[i];
 		fprintf(
 			stderr,
 			"%3d %s: type x%x, out %d, value ",
 			i,
-			rpcprm->name,
-			rpcprm->type,
-			rpcprm->output
+			param->name,
+			param->type,
+			param->output
 		);
-		if (rpcprm->value == NULL) {
+		if (param->value == NULL) {
 			fprintf(stderr, "(null)\n");
 			continue;
 		}
-		switch(get_datatype(rpcprm->type)) {
+		switch(get_datatype(param->type)) {
 			case DATATYPE_LONG:
-				fprintf(stderr, "(long) %lld\n", *((long long *)rpcprm->value));
+				fprintf(stderr, "(long) %lld\n", *((long long *)param->value));
 				break;
 			case DATATYPE_DOUBLE:
-				fprintf(stderr, "(double) %f\n", *((double *)rpcprm->value));
+				fprintf(stderr, "(double) %f\n", *((double *)param->value));
 				break;
 			default:
-				if (rpcprm->file) {
-					fprintf(stderr, "(file) %d %s\n", rpcprm->strlen, rpcprm->file);
+				if (param->file) {
+					fprintf(stderr, "(file) %d %s\n", param->strlen, param->file);
 				} else {
-					fprintf(stderr, "(char*) %d %s\n", rpcprm->strlen, (char *)rpcprm->value);
+					fprintf(stderr, "(char*) %d %s\n", param->strlen, (char *)param->value);
 				}
 		}
 	}
@@ -600,8 +576,8 @@ print_input_debug(RPCPARAMDATA * pdata, DBPROCESS * dbproc)
 	return TRUE;
 }
 
-int
-print_columns(RPCPARAMDATA * pdata, DBPROCESS * dbproc)
+static int
+print_columns(DBPROCESS *dbproc)
 {
 	int num_cols = dbnumcols(dbproc);
 	int i;
@@ -614,8 +590,8 @@ print_columns(RPCPARAMDATA * pdata, DBPROCESS * dbproc)
 	return num_cols;
 }
 
-int
-print_column_or_return(RPCPARAMDATA * pdata, DBPROCESS * dbproc, int colno, int is_ret, char *to_file)
+static int
+print_column_or_return(DBPROCESS *dbproc, int colno, int is_ret, char *to_file)
 {
 	int type;
 	BYTE *data;
@@ -644,7 +620,7 @@ print_column_or_return(RPCPARAMDATA * pdata, DBPROCESS * dbproc, int colno, int 
 	}
 
 	tmp_data_len = 48 + (2 * (data_len)); /* FIXME: We allocate more than we need here */
-	tmp_data = malloc(tmp_data_len);
+	tmp_data = xmalloc(tmp_data_len);
 	data_len = dbconvert(NULL, type, data, data_len, SYBCHAR, (BYTE*)tmp_data, -1);
 
 	printf("%s", tmp_data);
@@ -654,82 +630,82 @@ print_column_or_return(RPCPARAMDATA * pdata, DBPROCESS * dbproc, int colno, int 
 	return TRUE;
 }
 
-int
-print_row(RPCPARAMDATA * pdata, DBPROCESS * dbproc, int num_cols)
+static int
+print_row(DBPROCESS *dbproc, int num_cols)
 {
 	int i;
 
 	for (i=1; i<=num_cols; i++) {
-		print_column_or_return(pdata, dbproc, i, 0, NULL);
+		print_column_or_return(dbproc, i, 0, NULL);
 		printf(i == num_cols ? "\n" : "\t");
 	}
 
 	return num_cols;
 }
 
-int
-print_returns(RPCPARAMDATA * pdata, DBPROCESS * dbproc)
+static int
+print_returns(DBPROCESS *dbproc, RPCDATA *data)
 {
-	RPCPRMPARAMDATA *rpcprm = NULL;
+	RPCPARAM *param = NULL;
 	int prm_i = -1, i;
 	int num_rets = dbnumrets(dbproc);
 
 	for (i=1; i<=num_rets; i++) {
-		for (prm_i++; prm_i<pdata->paramslen; prm_i++) {
-			rpcprm = pdata->params[prm_i];
-			if (rpcprm->output)
+		for (prm_i++; prm_i<data->paramslen; prm_i++) {
+			param = data->params[prm_i];
+			if (param->output)
 				break;
 		}
-		if (!rpcprm) {
+		if (!param) {
 			fprintf(stderr, "Internal error: can't find output parameter n°%d\n", i);
 			return FALSE;
 		}
-		PRINT_NAME_OR_NUM(rpcprm->name, prm_i);
+		PRINT_NAME_OR_NUM(param->name, prm_i);
 		printf(": ");
-		print_column_or_return(pdata, dbproc, i, 1, rpcprm->file);
+		print_column_or_return(dbproc, i, 1, param->file);
 		printf("\n");
 	}
 
 	return num_rets;
 }
 
-int
-do_rpc(RPCPARAMDATA * pdata, DBPROCESS * dbproc)
+static int
+rpc_main(DBPROCESS *dbproc, RPCDATA *data)
 {
 	RETCODE ret_code = 0;
 	int num_res = 0;
 	int num_cols = 0;
 
-	RPCPRMPARAMDATA *rpcprm;
+	RPCPARAM *param;
 	int i, datalen, status;
 	long maxlen;
 
-	if (pdata->verbose) {
-		print_input_debug(pdata, dbproc);
+	if (data->verbose) {
+		print_input_debug(dbproc, data);
 	}
 
 	/* rpc init: ->spname */
-	if (FAIL == dbrpcinit(dbproc, pdata->spname, 0)) {
+	if (FAIL == dbrpcinit(dbproc, data->spname, 0)) {
 		fprintf(stderr, "dbrpcinit failed\n");
 		return FALSE;
 	}
 
 	/* rpc bind: ->params */
-	for (i=0; i<pdata->paramslen; i++) {
-		rpcprm = pdata->params[i];
+	for (i=0; i<data->paramslen; i++) {
+		param = data->params[i];
 		maxlen = datalen = -1;
-		status = rpcprm->output ? 1 : 0;
-		if (DATATYPE_STR == get_datatype(rpcprm->type)) {
-			datalen = rpcprm->strlen;
-			if (rpcprm->output) {
+		status = param->output;
+		if (DATATYPE_STR == get_datatype(param->type)) {
+			datalen = param->strlen;
+			if (param->output) {
 				maxlen = 8000;
 			}
 		}
-		if (rpcprm->value == NULL) {
+		if (param->value == NULL) {
 			datalen = 0;
 		}
-		if (FAIL == dbrpcparam(dbproc, rpcprm->name, (BYTE)status, rpcprm->type, maxlen, datalen, rpcprm->value)) {
-			fprintf(stderr, "dbrpcparam failed for %d / %s\n", i, rpcprm->name);
+		if (FAIL == dbrpcparam(dbproc, param->name, (BYTE)status, param->type, maxlen, datalen, param->value)) {
+			fprintf(stderr, "dbrpcparam failed for %d / %s\n", i, param->name);
 			/* NOTE: need to reset to retry: dbrpcinit(dbproc, "", DBRPCRESET);*/
 			return FALSE;
 		}
@@ -741,16 +717,15 @@ do_rpc(RPCPARAMDATA * pdata, DBPROCESS * dbproc)
 		return FALSE;
 	}
 
-	/* here we could clear the values
-	free_parameters_values(pdata);
-	*/
+	/* once sent we can free the params values */
+	free_data_paramsvalue(data);
 
 	/* fetch & print results */
 	while (SUCCEED == (ret_code = dbresults(dbproc))) {
 		printf("--------------------\nresult %d\n", ++num_res);
-		num_cols = print_columns(pdata, dbproc);
+		num_cols = print_columns(dbproc);
 		while(NO_MORE_ROWS != dbnextrow(dbproc)) {
-			print_row(pdata, dbproc, num_cols);
+			print_row(dbproc, num_cols);
 		};
 	}
 	if (ret_code != SUCCEED && ret_code != NO_MORE_RESULTS) {
@@ -758,19 +733,19 @@ do_rpc(RPCPARAMDATA * pdata, DBPROCESS * dbproc)
 		return FALSE;
 	}
 	printf("--------------------\nreturns\n");
-	print_returns(pdata, dbproc);
+	print_returns(dbproc, data);
 	printf("status: %d\n", dbretstatus(dbproc));
 
 	return TRUE;
 }
 
-int
-setoptions(DBPROCESS * dbproc, RPCPARAMDATA * params)
+static int
+set_login_options(DBPROCESS *dbproc, char *options, int textsize)
 {
 	RETCODE fOK;
 
-	if (dbfcmd(dbproc, "set textsize %d ", params->textsize) == FAIL) {
-		fprintf(stderr, "setoptions() could not set textsize at %s:%d\n", __FILE__, __LINE__);
+	if (dbfcmd(dbproc, "set textsize %d ", textsize) == FAIL) {
+		fprintf(stderr, "set_login_options() could not set textsize at %s:%d\n", __FILE__, __LINE__);
 		return FALSE;
 	}
 
@@ -778,26 +753,26 @@ setoptions(DBPROCESS * dbproc, RPCPARAMDATA * params)
 	 * If the option is a filename, read the SQL text from the file.
 	 * Else pass the option verbatim to the server.
 	 */
-	if (params->options) {
+	if (options) {
 		FILE *optFile;
 		char optBuf[256];
 
-		if ((optFile = fopen(params->options, "r")) == NULL) {
-			if (dbcmd(dbproc, params->options) == FAIL) {
-				fprintf(stderr, "setoptions() failed preparing options at %s:%d\n", __FILE__, __LINE__);
+		if ((optFile = fopen(options, "r")) == NULL) {
+			if (dbcmd(dbproc, options) == FAIL) {
+				fprintf(stderr, "set_login_options() failed preparing options at %s:%d\n", __FILE__, __LINE__);
 				return FALSE;
 			}
 		} else {
 			while (fgets (optBuf, sizeof(optBuf), optFile) != NULL) {
 				if (dbcmd(dbproc, optBuf) == FAIL) {
-					fprintf(stderr, "setoptions() failed preparing options at %s:%d\n", __FILE__, __LINE__);
+					fprintf(stderr, "set_login_options() failed preparing options at %s:%d\n", __FILE__, __LINE__);
 					fclose(optFile);
 					return FALSE;
 				}
 			}
 			if (!feof (optFile)) {
 				perror("freerpc");
-				fprintf(stderr, "error reading options file \"%s\" at %s:%d\n", params->options, __FILE__, __LINE__);
+				fprintf(stderr, "error reading options file \"%s\" at %s:%d\n", options, __FILE__, __LINE__);
 				fclose(optFile);
 				return FALSE;
 			}
@@ -806,7 +781,7 @@ setoptions(DBPROCESS * dbproc, RPCPARAMDATA * params)
 	}
 
 	if (dbsqlexec(dbproc) == FAIL) {
-		fprintf(stderr, "setoptions() failed sending options at %s:%d\n", __FILE__, __LINE__);
+		fprintf(stderr, "set_login_options() failed sending options at %s:%d\n", __FILE__, __LINE__);
 		return FALSE;
 	}
 
@@ -814,20 +789,20 @@ setoptions(DBPROCESS * dbproc, RPCPARAMDATA * params)
 		while ((fOK = dbnextrow(dbproc)) == REG_ROW)
 			continue;
 		if (fOK == FAIL) {
-			fprintf(stderr, "setoptions() failed sending options at %s:%d\n", __FILE__, __LINE__);
+			fprintf(stderr, "set_login_options() failed sending options at %s:%d\n", __FILE__, __LINE__);
 			return FALSE;
 		}
 	}
 	if (fOK == FAIL) {
-		fprintf(stderr, "setoptions() failed sending options at %s:%d\n", __FILE__, __LINE__);
+		fprintf(stderr, "set_login_options() failed sending options at %s:%d\n", __FILE__, __LINE__);
 		return FALSE;
 	}
 
 	return TRUE;
 }
 
-void
-pusage(void)
+static void
+print_usage(void)
 {
 	fprintf(stderr, "usage:  freerpc procedure\n");
 	fprintf(stderr, "        [-n name] [-t type] [-o output_len] [-N] [-p param1]\n");
@@ -842,8 +817,8 @@ pusage(void)
 	fprintf(stderr, "         -n @a -t char -p test\n");
 }
 
-int
-err_handler(DBPROCESS * dbproc, int severity, int dberr, int oserr, char *dberrstr, char *oserrstr)
+static int
+err_handler(DBPROCESS *dbproc, int severity, int dberr, int oserr, char *dberrstr, char *oserrstr)
 {
 	if (dberr) {
 		fprintf(stderr, "Msg %d, Level %d\n", dberr, severity);
@@ -858,8 +833,8 @@ err_handler(DBPROCESS * dbproc, int severity, int dberr, int oserr, char *dberrs
 	return INT_CANCEL;
 }
 
-int
-msg_handler(DBPROCESS * dbproc, DBINT msgno, int msgstate, int severity, char *msgtext, char *srvname, char *procname, int line)
+static int
+msg_handler(DBPROCESS *dbproc, DBINT msgno, int msgstate, int severity, char *msgtext, char *srvname, char *procname, int line)
 {
 	/*
 	 * If it's a database change message, we'll ignore it.
@@ -882,7 +857,121 @@ msg_handler(DBPROCESS * dbproc, DBINT msgno, int msgstate, int severity, char *m
 	return (0);
 }
 
-int
+static void *
+xmalloc(size_t s)
+{
+	void *p = malloc(s);
+
+	if (!p) {
+		fprintf(stderr, "Out of memory\n");
+		exit(EXIT_FAILURE);
+	}
+	return p;
+}
+
+static void *
+xcalloc(size_t s)
+{
+	void *p = xmalloc(s);
+	memset(p, 0, s);
+	return p;
+}
+
+static void *
+xrealloc(void *p, size_t s)
+{
+	p = realloc(p, s);
+	if (!p) {
+		fprintf(stderr, "Out of memory\n");
+		exit(EXIT_FAILURE);
+	}
+	return p;
+}
+
+static int
+free_paramopts(RPCPARAMOPTS *paramopts)
+{
+	if (paramopts->name)
+		free(paramopts->name);
+
+	free(paramopts);
+
+	return TRUE;
+}
+
+static int
+free_login(RPCLOGIN *login)
+{
+	if (login->interfacesfile)
+		free(login->interfacesfile);
+	if (login->user)
+		free(login->user);
+	if (login->pass)
+		free(login->pass);
+	if (login->server)
+		free(login->server);
+	if (login->dbname)
+		free(login->dbname);
+	if (login->options)
+		free(login->options);
+	if (login->charset)
+		free(login->charset);
+	if (login->version)
+		free(login->version);
+
+	free(login);
+
+	return TRUE;
+}
+
+static int
+free_data(RPCDATA *data)
+{
+	int i;
+
+	if (data->spname)
+		free(data->spname);
+
+	if (!data->paramslen) {
+		free(data);
+		return TRUE;
+	}
+
+	for (i=0; i<data->paramslen; i++) {
+		RPCPARAM *param;
+		param = data->params[i];
+		if (param->value)
+			free(param->value);
+		if (param->file)
+			free(param->file);
+		if (param->name)
+			free(param->name);
+		free(param);
+	}
+
+	free(data->params);
+	free(data);
+	return TRUE;
+}
+
+static int
+free_data_paramsvalue(RPCDATA *data)
+{
+	int i;
+
+	for (i=0; i<data->paramslen; i++) {
+		RPCPARAM *param;
+		param = data->params[i];
+		if (param->value) {
+			free(param->value);
+			param->value = NULL;
+		}
+	}
+
+	return TRUE;
+}
+
+static int
 read_file(char *name, BYTE **pbuf, int *plen, int maxlen)
 {
 	FILE *fp;
@@ -904,7 +993,7 @@ read_file(char *name, BYTE **pbuf, int *plen, int maxlen)
 		len = maxlen;
 	}
 
-	buf = malloc(len + 1);
+	buf = xmalloc(len + 1);
 	ok = len ? fread(buf, len, 1, fp) : 1;
 	fclose(fp);
 
@@ -920,7 +1009,7 @@ read_file(char *name, BYTE **pbuf, int *plen, int maxlen)
 	return TRUE;
 }
 
-int
+static int
 write_file(char *name, char *buf, long len)
 {
 	FILE *fp;
@@ -941,7 +1030,7 @@ write_file(char *name, char *buf, long len)
 	return TRUE;
 }
 
-char *
+static char *
 to_uppercase(char *s)
 {
 	int i = 0;

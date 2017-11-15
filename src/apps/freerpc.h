@@ -1,40 +1,50 @@
-#define RPCRPM_DEFAULTTYPE SYBVARCHAR
+#define RPCPARAM_DEFAULTTYPE SYBVARCHAR
 
-enum datatype {
+enum rpc_datatype {
 	DATATYPE_STR,
 	DATATYPE_LONG,
 	DATATYPE_DOUBLE
 };
 
-typedef struct keyval {
+typedef struct rpc_keyval {
 	const char* key;
 	int value;
 } RPCKEYVAL;
 
-typedef struct prmpd
+typedef struct rpc_data_param
 {
 	char *name;
 	int type;
-	int output;
+	unsigned int output:1;
 	char *file;
 	BYTE *value;
 	int strlen;
 }
-RPCPRMPARAMDATA;
+RPCPARAM;
 
-typedef struct pd
+typedef struct rpc_data
 {
 	char *spname;
-	RPCPRMPARAMDATA **params;
+	RPCPARAM **params;
 	int paramslen;
-	char *paramname;
-	int paramfile;
-	int paramtype;
-	int paramoutput;
-	int paramnull;
-	char *interfacesfile;
-	int textsize;
 	int verbose;
+	int textsize;
+}
+RPCDATA;
+
+typedef struct rpc_paramopts
+{
+	char *name;
+	int type;
+	unsigned int file:1;
+	unsigned int output:1;
+	unsigned int null:1;
+}
+RPCPARAMOPTS;
+
+typedef struct rpc_login
+{
+	char *interfacesfile;
 	char *user;
 	char *pass;
 	char *server;
@@ -43,11 +53,5 @@ typedef struct pd
 	char *charset;
 	char *version;
 	int packetsize;
-	int Uflag;
-	int Iflag;
-	int Sflag;
-	int Pflag;
-	int Tflag;
-	int Aflag;
 }
-RPCPARAMDATA;
+RPCLOGIN;
