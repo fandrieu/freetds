@@ -1039,6 +1039,9 @@ tds_generic_put(TDSSOCKET * tds, TDSCOLUMN * curcol, int bcp7)
 			colsize = 0;
 			converted = -1;
 		}
+
+		/* ATTN: data size may have changed */
+		size = colsize;
 	}
 
 	/*
