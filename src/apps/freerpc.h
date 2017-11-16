@@ -3,7 +3,8 @@
 enum rpc_datatype {
 	DATATYPE_STR,
 	DATATYPE_LONG,
-	DATATYPE_DOUBLE
+	DATATYPE_DOUBLE,
+	DATATYPE_BYTES
 };
 
 typedef struct rpc_keyval {

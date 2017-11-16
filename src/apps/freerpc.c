@@ -64,6 +64,7 @@ static int process_parameters(int argc, char **argv, RPCDATA *data, RPCLOGIN *lo
 static enum rpc_datatype get_datatype(int type);
 static int process_parameter_rpctype(RPCPARAMOPTS *paramopts, char *optarg);
 static int process_parameter_rpcparam(RPCDATA *data, RPCPARAMOPTS *paramopts, char *optarg);
+static int init_dblib(void);
 static int login_to_database(DBPROCESS **pdbproc, RPCLOGIN *login);
 static int set_login_options(DBPROCESS *dbproc, char *options, int textsize);
 static void print_usage(void);
@@ -103,8 +104,8 @@ main(int argc, char **argv)
 
 	setlocale(LC_ALL, "");
 
+	init_dblib();	/* need to process params with dbconvert */
 	data->textsize = 2147483647;	/* our default text size is the LARGEST */
-
 	if (process_parameters(argc, argv, data, login, paramopts) == FALSE) {
 		goto cleanup;
 	}
@@ -253,14 +254,17 @@ get_datatype(int type) {
 		case SYBINT4:
 		case SYBINT8:
 		case SYBBIT:
-		case SYBMONEY4:
-		case SYBMONEY:
 			return DATATYPE_LONG;
 		case SYBFLT8:
 		case SYBREAL:
-		case SYBNUMERIC:
-		case SYBDECIMAL:
 			return DATATYPE_DOUBLE;
+		case SYBMONEY4:
+		case SYBMONEY:
+		case SYBDATETIME4:
+		case SYBDATETIME:
+		case SYBDATE:
+		case SYBTIME:
+			return DATATYPE_BYTES;
 		default:
 			return DATATYPE_STR;
 	}
@@ -272,7 +276,6 @@ process_parameter_rpctype(RPCPARAMOPTS *paramopts, char *optarg)
 	char *s = to_uppercase(optarg);
 	int type = 0, i;
 
-	/* enable all for testing purposes... */
 	const RPCKEYVAL types[] = {
 		{"DEFAULT", RPCPARAM_DEFAULTTYPE},
 		{"0", RPCPARAM_DEFAULTTYPE},
@@ -295,22 +298,22 @@ process_parameter_rpctype(RPCPARAMOPTS *paramopts, char *optarg)
 		{"DATETIME4", SYBDATETIME4},
 		{"REAL", SYBREAL},
 		{"BINARY", SYBBINARY},
-		/* {"VOID", SYBVOID},	segfault */
+		/* {"VOID", SYBVOID},	assert column_varint_size */
 		{"VARBINARY", SYBVARBINARY},
-		{"NUMERIC", SYBNUMERIC},
-		{"DECIMAL", SYBDECIMAL},
+		/* {"NUMERIC", SYBNUMERIC},	needs len */
+		/* {"DECIMAL", SYBDECIMAL},	needs len */
 		/* {"FLTN", SYBFLTN},	needs len */
 		/* {"MONEYN", SYBMONEYN},	needs len */
 		/* {"DATETIMN", SYBDATETIMN},	needs len */
 		{"NVARCHAR", SYBNVARCHAR},
 		{"DATE", SYBDATE},
 		{"TIME", SYBTIME},
-		{"BIGDATETIME", SYBBIGDATETIME},
-		{"BIGTIME", SYBBIGTIME},
-		{"MSDATE", SYBMSDATE},
-		{"MSTIME", SYBMSTIME},
-		{"MSDATETIME2", SYBMSDATETIME2},
-		{"MSDATETIMEOFFSET", SYBMSDATETIMEOFFSET},
+		/* {"BIGDATETIME", SYBBIGDATETIME},	needs len */
+		/* {"BIGTIME", SYBBIGTIME},	needs len */
+		/* {"MSDATE", SYBMSDATE},	needs len */
+		/* {"MSTIME", SYBMSTIME},	needs len */
+		/* {"MSDATETIME2", SYBMSDATETIME2},	needs len */
+		/* {"MSDATETIMEOFFSET", SYBMSDATETIMEOFFSET},	needs len */
 	};
 	int typeslen = sizeof(types)/sizeof(types[0]);
 
@@ -335,6 +338,7 @@ static int
 process_parameter_rpcparam(RPCDATA *data, RPCPARAMOPTS *paramopts, char *optarg)
 {
 	RPCPARAM *param;
+	int data_len, tmp_data_len;
 
 	if (!data->paramslen) {
 		data->paramslen = 1;
@@ -362,7 +366,6 @@ process_parameter_rpcparam(RPCDATA *data, RPCPARAMOPTS *paramopts, char *optarg)
 	}
 	if (paramopts->null) {
 		paramopts->null = 0;
-
 		return TRUE;
 	}
 
@@ -371,41 +374,48 @@ process_parameter_rpcparam(RPCDATA *data, RPCPARAMOPTS *paramopts, char *optarg)
 		return read_file(param->file, &(param->value), &(param->strlen), data->textsize);
 	}
 
-	/* convert non-text data */
-	/* TODO: parse date ... */
-	switch(get_datatype(param->type)) {
-		case DATATYPE_LONG: {
-			int64_t *tmp;
-			double mny;
-			tmp = xmalloc(sizeof(*tmp));
-			if (param->type == SYBMONEY || param->type == SYBMONEY4) {
-				mny = atof(optarg);
-				*tmp = (int64_t)(mny * 10000);
-			} else {
-#ifdef WIN32
-				*tmp = _atoi64(optarg);
-#else
-				*tmp = atoll(optarg);
-#endif
-			}
-			param->value = (BYTE *)tmp;
-			break;
-		}
-		case DATATYPE_DOUBLE: {
-			double *tmp;
-			tmp = xmalloc(sizeof(*tmp));
-			*tmp = atof(optarg);
-			param->value = (BYTE *)tmp;
-			break;
-		}
-		case DATATYPE_STR: {
-			param->value = (BYTE *)(strdup(optarg));
-			param->strlen = (int)strlen(optarg);
-			break;
-		}
-		default:
-			fprintf(stderr, "Internal error: missing datatype %d\n", get_datatype(param->type));
+	/* set text data as is */
+	if (get_datatype(param->type) == DATATYPE_STR) {
+		param->value = (BYTE *)(strdup(optarg));
+		param->strlen = (int)strlen(optarg);
+		return TRUE;
 	}
+
+	/* convert non-text data */
+	if (!dbwillconvert(SYBCHAR, param->type)) {
+		fprintf(stderr, "Can't parse type x%x\n", param->type);
+		return FALSE;
+	}
+
+	tmp_data_len = 8;	/* fixed length types */
+	param->value = xmalloc(tmp_data_len);
+	memset(param->value, 0, tmp_data_len);
+	data_len = (int)strlen(optarg);
+	data_len = dbconvert(NULL, SYBCHAR, (BYTE *)optarg, data_len, param->type, param->value, tmp_data_len);
+
+	if (data_len < 0) {
+		fprintf(stderr, "Error converting param %d \"%s\" to type x%x\n", data->paramslen, optarg, param->type);
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+static int
+init_dblib(void)
+{
+	/* Initialize DB-Library. */
+
+	if (dbinit() == FAIL)
+		return FALSE;
+
+	/*
+	 * Install the user-supplied error-handling and message-handling
+	 * routines. They are defined at the bottom of this source file.
+	 */
+
+	dberrhandle(err_handler);
+	dbmsghandle(msg_handler);
 
 	return TRUE;
 }
@@ -428,19 +438,6 @@ login_to_database(DBPROCESS **pdbproc, RPCLOGIN *login)
 	};
 	int versionslen = sizeof(versions)/sizeof(versions[0]);
 	int i;
-
-	/* Initialize DB-Library. */
-
-	if (dbinit() == FAIL)
-		return (FALSE);
-
-	/*
-	 * Install the user-supplied error-handling and message-handling
-	 * routines. They are defined at the bottom of this source file.
-	 */
-
-	dberrhandle(err_handler);
-	dbmsghandle(msg_handler);
 
 	/* If the interfaces file was specified explicitly, set it. */
 	if (login->interfacesfile != NULL)
@@ -548,6 +545,13 @@ print_input_debug(DBPROCESS *dbproc, RPCDATA *data)
 				break;
 			case DATATYPE_DOUBLE:
 				fprintf(stderr, "(double) %f\n", *((double *)param->value));
+				break;
+			case DATATYPE_BYTES:
+				fprintf(
+					stderr, "(bytes) %02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x\n",
+					param->value[0], param->value[1], param->value[2], param->value[3],
+					param->value[4], param->value[5], param->value[6], param->value[7]
+				);
 				break;
 			default:
 				if (param->file) {
