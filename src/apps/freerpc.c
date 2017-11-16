@@ -55,8 +55,6 @@
 #include <locale.h>
 #endif
 
-#include <freetds/tds.h>
-#include <freetds/utils.h>
 #include "replacements.h"
 #include <sybfront.h>
 #include <sybdb.h>
@@ -104,11 +102,6 @@ main(int argc, char **argv)
 	int ok = 0;
 
 	setlocale(LC_ALL, "");
-
-#ifdef __VMS
-	/* Convert VMS-style arguments to Unix-style */
-	parse_vms_args(&argc, &argv);
-#endif
 
 	data->textsize = 2147483647;	/* our default text size is the LARGEST */
 
@@ -163,14 +156,11 @@ process_parameters(int argc, char **argv, RPCDATA *data,
 	 * Get the rest of the arguments
 	 */
 	optind = 2; /* start processing options after spname */
-	while ((ch = getopt(argc, argv, "p:n:ft:oNU:P:I:S:T:A:V:O:0:C:dvD:")) != -1) {
+	while ((ch = getopt(argc, argv, "p:n:ft:oNU:P:I:S:T:A:V:O:0:C:vD:")) != -1) {
 		switch (ch) {
 		/* global */
 		case 'v':
 			data->verbose++;
-			break;
-		case 'd':
-			tdsdump_open(NULL);
 			break;
 		case 'T':
 			data->textsize = atoi(optarg);
@@ -202,7 +192,7 @@ process_parameters(int argc, char **argv, RPCDATA *data,
 			login->user = strdup(optarg);
 			break;
 		case 'P':
-			login->pass = tds_getpassarg(optarg);
+			login->pass = strdup(optarg);
 			break;
 		case 'I':
 			free(login->interfacesfile);
@@ -245,6 +235,10 @@ process_parameters(int argc, char **argv, RPCDATA *data,
 			fprintf(stderr, "-S must be supplied.\n");
 			return (FALSE);
 		}
+	}
+	if (login->user && !(login->pass && strcmp(login->pass, "-"))) {
+		login->pass = xmalloc(128);
+		readpassphrase("Password: ", login->pass, 128, RPP_ECHO_OFF);
 	}
 
 	return (TRUE);
@@ -311,8 +305,8 @@ process_parameter_rpctype(RPCPARAMOPTS *paramopts, char *optarg)
 		{"NVARCHAR", SYBNVARCHAR},
 		{"DATE", SYBDATE},
 		{"TIME", SYBTIME},
-		{"BIGDATETIME", SYB5BIGDATETIME},
-		{"BIGTIME", SYB5BIGTIME},
+		{"BIGDATETIME", SYBBIGDATETIME},
+		{"BIGTIME", SYBBIGTIME},
 		{"MSDATE", SYBMSDATE},
 		{"MSTIME", SYBMSTIME},
 		{"MSDATETIME2", SYBMSDATETIME2},
@@ -571,7 +565,7 @@ print_input_debug(DBPROCESS *dbproc, RPCDATA *data)
 		}
 	}
 
-	fprintf(stderr, "tds version %s (%d), %s\n", vertext, verint, TDS_VERSION_NO);
+	fprintf(stderr, "tds version %s (%d), %s\n", vertext, verint, dbversion());
 
 	return TRUE;
 }
@@ -808,7 +802,7 @@ print_usage(void)
 	fprintf(stderr, "        [-n name] [-t type] [-o output_len] [-N] [-p param1]\n");
 	fprintf(stderr, "        [-n name] [-p paramN]\n");
 	fprintf(stderr, "        [-U username] [-P password] [-I interfaces_file] [-S server] [-D database]\n");
-	fprintf(stderr, "        [-v] [-d] [-O \"set connection_option on|off, ...]\"\n");
+	fprintf(stderr, "        [-v] [-O \"set connection_option on|off, ...]\"\n");
 	fprintf(stderr, "        [-A packet size] [-T text or image size]\n");
 	fprintf(stderr, "        \n");
 	fprintf(stderr, "example: freerpc sp_help -p sp_help -S mssql -U guest -P password\n");
