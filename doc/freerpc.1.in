@@ -1,0 +1,153 @@
+.\" cf. groff_mdoc
+.Dd November 17, 2017
+.Os FreeTDS @VERSION@
+.Dt FREERPC 1
+.Sh NAME
+.Nm freerpc
+.Nd send RPC queries to Sybase and Microsoft databases
+.Sh SYNOPSIS
+.Nm
+.Ar procedure_name
+.Op Fl n Ar param_name
+.Op Fl t Ar param_type
+.Op Fl ofN
+.Op Fl p Ar param_value
+.Op Fl S Ar servername
+.Op Fl D Ar dbname
+.Op Fl U Ar username
+.Op Fl P Ar password
+.Op Fl I Ar interfaces
+.Op Fl T Ar textsize
+.Op Fl A Ar packet_size
+.Op Fl O Ar options
+.Op Fl C Ar charset
+.Op Fl V Ar tds_version
+.Op Fl v
+.\"
+.Sh DESCRIPTION
+.Nm
+is a utility program distributed with FreeTDS.
+.Nm
+sends rpc queries to Sybase and Microsoft databases and prints
+their outputs.
+.Pp
+.Nm
+makes use of the DB-Library rpc API provided by FreeTDS. This
+API is also available to application developers.
+.Pp
+The manual pages or online help for Sybase or SQL Server can be
+referenced for more detailed information on rpc functionality.
+.\"
+.Sh PROCEDURE\ AND\ PARAMETERS
+.Bl -tag -width indent
+.It Ar procedure_name
+The name of the procedure to execute, mandatory.
+.It Fl p Ar param_value
+Add a parameter and set its value.  This is optional and can be repeated as needed.
+The text
+.Ar param_value
+will be converted to
+.Ar param_type
+using DB-Library if needed.
+The parameter's properties can be modified by setting the following options
+.Pa before
+.Fl p:
+.\"
+.Sh PARAMETER MODIFIERS
+.Bl -tag -width indent
+.It Fl n Ar param_name
+Sets the parameter name.  By default parameters are sent in order.
+.It Fl t Ar param_type
+Sets the parameter type.  Unlike others, this modifier carries on for all following parameters.
+.It Fl o
+Set as output parameter.
+.It Fl f
+Parameter's
+.Ar param_value
+is a file name. Raw data for
+.Ar param_type
+will be read from and/or written to that file.
+.It Fl N
+Ignore
+.Ar param_value
+and send NULL instead.  This is useful for output parameters, especially when outputing to file.
+.Ar param_value
+still needs to be provided.
+.\"
+.Sh CONNECTION
+.Bl -tag -width indent
+.It Fl A Ar packet_size
+Set the size of a TDS packet to packet_size.  Not sure why you would
+want to do this, except as an experiment.
+.It Fl D Ar dbname
+The name of the default database to use.  Overrides default database associated with the login account.
+.It Fl I Ar interfaces
+The name and location of the
+.Pa interfaces
+file to search when connecting to servername. Overrides
+.Pa freetds.conf.
+.It Fl O Ar options
+SQL text to set connection options prior to the bcp operation.  If
+.Ar options
+is a valid filename, the SQL is read from the file
+instead. Sometimes needed for
+.Ar queryout .
+Example: 
+.Li -O `SET QUOTED_IDENTIFIER ON' Ns .
+.It Fl P Ar password
+The password associated with 
+.Ar username .
+.It Fl S Ar servername
+The name of the Database Server to which to connect.
+.It Fl T Ar textsize
+For text or image columns, set the maximum number of characters to
+request from the server. Defaults to the setting in
+.Pa freetds.conf .
+If
+not specified anywhere, defaults to the full size of the data.
+.It Fl U Ar username
+A database login name.  For TDS\ 7+ connections, a domain login is attempted
+if 
+.Ar username
+is not provided. 
+.It Fl C Ar charset
+Specify character set to use to talk to server.
+.It Fl V Ar tds_version
+Specify the TDS protocol versions to use, overriding
+.Pa freetds.conf .
+.El
+.Sh OPTIONS
+.Bl -tag -width indent
+.It Fl v
+Be more verbose.
+.\"
+.Sh ENVIRONMENT
+.Ev DSQUERY
+default 
+.Ar servername
+.\"
+.Sh EXAMPLE
+.Pp
+.Nm
+sp_help -p sp_help -S mssql -U guest -P password -v
+.Pp
+.Nm
+sp_executesql -S mssql -t ntext -p "select @a" -p "@a char(4)" -n @a -t char -p test
+.Pp
+.Nm
+sp_executesql -S mssql -p "set @b=upper(@a)" -p "@a char(4),@b char(4) out" -p test -oNfp upper.txt
+.\"
+.Sh NOTES
+Resultsets returned are printed to standard output as tab separated data,
+then parameters output values one by line. That last line shows the return code.
+.\"
+.Sh HISTORY
+.Nm
+first appeared in FreeTDS 1.1
+.Sh AUTHORS
+The
+.Nm
+utility was written by
+.An Frank Andrieu Ns .
+.Sh BUGS
+Datatype support depends on server and protocol version, some combinations trigger errors.

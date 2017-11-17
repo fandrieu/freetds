@@ -88,7 +88,7 @@ static int free_login(RPCLOGIN *login);
 static int free_data(RPCDATA *data);
 static int free_data_paramsvalue(RPCDATA *data);
 
-static char *to_uppercase(char *s);
+static char *to_lowercase(char *s);
 static int read_file(char *name, BYTE **pbuf, int *plen, int maxlen);
 static int write_file(char *name, char *buf, long len);
 #define PRINT_NAME_OR_NUM(name, num) name && strlen(name) ? printf("%s", name) : printf("[%d]", num)
@@ -273,47 +273,46 @@ get_datatype(int type) {
 static int
 process_parameter_rpctype(RPCPARAMOPTS *paramopts, char *optarg)
 {
-	char *s = to_uppercase(optarg);
+	char *s = to_lowercase(optarg);
 	int type = 0, i;
-
 	const RPCKEYVAL types[] = {
-		{"DEFAULT", RPCPARAM_DEFAULTTYPE},
+		{"default", RPCPARAM_DEFAULTTYPE},
 		{"0", RPCPARAM_DEFAULTTYPE},
-		{"CHAR", SYBCHAR},
-		{"VARCHAR", SYBVARCHAR},
-		/* {"INTN", SYBINTN},	needs len */
-		{"INT1", SYBINT1},
-		{"INT2", SYBINT2},
-		{"INT4", SYBINT4},
-		{"INT8", SYBINT8},
-		{"FLT8", SYBFLT8},
-		{"DATETIME", SYBDATETIME},
-		{"BIT", SYBBIT},
-		/* {"BITN", SYBBITN},	needs len */
-		{"TEXT", SYBTEXT},
-		{"NTEXT", SYBNTEXT},
-		{"IMAGE", SYBIMAGE},
-		{"MONEY4", SYBMONEY4},
-		{"MONEY", SYBMONEY},
-		{"DATETIME4", SYBDATETIME4},
-		{"REAL", SYBREAL},
-		{"BINARY", SYBBINARY},
-		/* {"VOID", SYBVOID},	assert column_varint_size */
-		{"VARBINARY", SYBVARBINARY},
-		/* {"NUMERIC", SYBNUMERIC},	needs len */
-		/* {"DECIMAL", SYBDECIMAL},	needs len */
-		/* {"FLTN", SYBFLTN},	needs len */
-		/* {"MONEYN", SYBMONEYN},	needs len */
-		/* {"DATETIMN", SYBDATETIMN},	needs len */
-		{"NVARCHAR", SYBNVARCHAR},
-		{"DATE", SYBDATE},
-		{"TIME", SYBTIME},
-		/* {"BIGDATETIME", SYBBIGDATETIME},	needs len */
-		/* {"BIGTIME", SYBBIGTIME},	needs len */
-		/* {"MSDATE", SYBMSDATE},	needs len */
-		/* {"MSTIME", SYBMSTIME},	needs len */
-		/* {"MSDATETIME2", SYBMSDATETIME2},	needs len */
-		/* {"MSDATETIMEOFFSET", SYBMSDATETIMEOFFSET},	needs len */
+		{"char", SYBCHAR},
+		{"varchar", SYBVARCHAR},
+		{"nvarchar", SYBNVARCHAR},
+		{"text", SYBTEXT},
+		{"ntext", SYBNTEXT},
+		/* {"void", SYBVOID},	assert column_varint_size */
+		{"binary", SYBBINARY},
+		{"varbinary", SYBVARBINARY},
+		{"image", SYBIMAGE},
+		{"bit", SYBBIT},
+		/* {"bitn", SYBBITN},	needs len */
+		{"int1", SYBINT1},
+		{"int2", SYBINT2},
+		{"int4", SYBINT4},
+		{"int8", SYBINT8},
+		/* {"intn", SYBINTN},	needs len */
+		{"money4", SYBMONEY4},
+		{"money", SYBMONEY},
+		{"flt8", SYBFLT8},
+		{"real", SYBREAL},
+		/* {"moneyn", SYBMONEYN},	needs len */
+		/* {"decimal", SYBDECIMAL},	needs len */
+		/* {"numeric", SYBNUMERIC},	needs len */
+		/* {"fltn", SYBFLTN},	needs len */
+		{"datetime4", SYBDATETIME4},
+		{"datetime", SYBDATETIME},
+		/* {"datetimn", SYBDATETIMN},	needs len */
+		{"date", SYBDATE},
+		{"time", SYBTIME},
+		/* {"bigdatetime", SYBBIGDATETIME},	needs len */
+		/* {"bigtime", SYBBIGTIME},	needs len */
+		/* {"msdate", SYBMSDATE},	needs len */
+		/* {"mstime", SYBMSTIME},	needs len */
+		/* {"msdatetime2", SYBMSDATETIME2},	needs len */
+		/* {"msdatetimeoffset", SYBMSDATETIMEOFFSET},	needs len */
 	};
 	int typeslen = sizeof(types)/sizeof(types[0]);
 
@@ -325,6 +324,10 @@ process_parameter_rpctype(RPCPARAMOPTS *paramopts, char *optarg)
 	}
 	free(s);
 	if (!type) {
+		fprintf(stderr, "Supported types:\n");
+		for(i=0; i<typeslen; i++) {
+			fprintf(stderr, "\t%-10s 0x%x\n", types[i].key, types[i].value);
+		}
 		fprintf(stderr, "Unsupported rpc param type %s\n", optarg);
 		paramopts->type = RPCPARAM_DEFAULTTYPE;
 		return FALSE;
@@ -802,17 +805,12 @@ set_login_options(DBPROCESS *dbproc, char *options, int textsize)
 static void
 print_usage(void)
 {
-	fprintf(stderr, "usage:  freerpc procedure\n");
-	fprintf(stderr, "        [-n name] [-t type] [-o output_len] [-N] [-p param1]\n");
-	fprintf(stderr, "        [-n name] [-p paramN]\n");
-	fprintf(stderr, "        [-U username] [-P password] [-I interfaces_file] [-S server] [-D database]\n");
-	fprintf(stderr, "        [-v] [-O \"set connection_option on|off, ...]\"\n");
-	fprintf(stderr, "        [-A packet size] [-T text or image size]\n");
-	fprintf(stderr, "        \n");
-	fprintf(stderr, "example: freerpc sp_help -p sp_help -S mssql -U guest -P password\n");
-	fprintf(stderr, "         freerpc sp_executesql -S mssql \\\n");
-	fprintf(stderr, "         -t ntext -p \"select @a\" -p \"@a char(4)\" \\\n");
-	fprintf(stderr, "         -n @a -t char -p test\n");
+	fprintf(stderr, "usage: freerpc procedure_name\n");
+	fprintf(stderr, "\t[-n param_name] [-t param_type] [-o] [-N] [-f] [-p param_value]\n");
+	fprintf(stderr, "\t[-p param_valueN]\n");
+	fprintf(stderr, "\t[-U username] [-P password] [-I interfaces_file] [-S server] [-D database]\n");
+	fprintf(stderr, "\t[-v] [-O \"set connection_option on|off, ...]\"\n");
+	fprintf(stderr, "\t[-A packet size] [-T textsize] [-V tds_version]\n");
 }
 
 static int
@@ -1029,14 +1027,14 @@ write_file(char *name, char *buf, long len)
 }
 
 static char *
-to_uppercase(char *s)
+to_lowercase(char *s)
 {
 	int i = 0;
 	char *str = strdup(s);
 
 	while (str[i]) {
-		if (str[i] >= 97 && str[i] <= 122)
-			str[i] -= 32;
+		if (str[i] >= 'A' && str[i] <= 'Z')
+			str[i] += 32;
 		i++;
 	}
 	return (str);

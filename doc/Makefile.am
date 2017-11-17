@@ -13,9 +13,10 @@ EXTRA_DIST =	api_status.txt bcp.txt cap.txt getting_started.txt \
 		images grep_sample_code tds_ssl.html \
 		freebcp.1.in tsql.1.in osql.1.in bsqldb.1.in bsqlodbc.1.in \
 		defncopy.1.in datacopy.1.in fisql.1.in freetds.conf.5.in \
-		userguide_desc.sgml
+		freerpc.1.in userguide_desc.sgml
 
 man_MANS = 	freebcp.1 \
+		freerpc.1 \
 		tsql.1 \
 		osql.1 \
 		bsqldb.1 \

@@ -2725,6 +2725,18 @@ To avoid this problem, choose a threading model in <filename>odbcinst.ini</>.
 				</varlistentry>
 			
 			<varlistentry>
+				<term>freerpc</term>
+				<listitem>
+
+<para>Sends rpc queries to Sybase and Microsoft databases and prints their outputs.</para>
+
+<para><command>freerpc</> makes use of the &dblib; rpc <acronym>API</>.</para>
+
+<para>The manual pages or online help for Sybase or Microsoft SQL Server can be referenced for more detailed information on rpc functionality.</para>
+					</listitem>
+				</varlistentry>
+
+			<varlistentry>
 				<term>osql</term>
 				<listitem>
 
