@@ -21,7 +21,7 @@ typedef struct rpc_data_param
 	unsigned int output:1;
 	char *file;
 	BYTE *value;
-	int strlen;
+	DBINT strlen;
 }
 RPCPARAM;
 
@@ -29,6 +29,7 @@ typedef struct rpc_data
 {
 	char *spname;
 	RPCPARAM **params;
+	FILE *fpout;
 	int paramslen;
 	int status;
 	int verbose;
@@ -42,6 +43,7 @@ typedef struct rpc_paramopts
 	unsigned int file:1;
 	unsigned int output:1;
 	unsigned int null:1;
+	int stdincheck;
 }
 RPCPARAMOPTS;
 

@@ -69,12 +69,12 @@ static int init_dblib(void);
 static int login_to_database(DBPROCESS **pdbproc, RPCLOGIN *login);
 static int set_login_options(DBPROCESS *dbproc, char *options, int textsize);
 static void print_usage(void);
-
 static int print_input_debug(DBPROCESS *dbproc, RPCDATA *data);
-static int print_columns(DBPROCESS *dbproc);
-static int print_column_or_return(DBPROCESS *dbproc, int colno, int is_ret, char *to_file);
-static int print_row(DBPROCESS *dbproc, int num_cols);
-static int print_returns(DBPROCESS * dbproc, RPCDATA *data);
+
+static int fprint_columns(FILE *fpout, DBPROCESS *dbproc);
+static int fprint_column_or_return(FILE *fpout, DBPROCESS *dbproc, int colno, int is_ret, char *to_file);
+static int fprint_row(FILE *fpout, DBPROCESS *dbproc, int num_cols);
+static int fprint_returns(FILE *fpout, DBPROCESS * dbproc, RPCDATA *data);
 static int rpc_main(DBPROCESS * dbproc, RPCDATA *data);
 
 static int err_handler(DBPROCESS *dbproc, int severity, int dberr, int oserr, char *dberrstr, char *oserrstr);
@@ -90,9 +90,9 @@ static int free_data(RPCDATA *data);
 static int free_data_paramsvalue(RPCDATA *data);
 
 static char *to_lowercase(char *s);
-static int read_file(char *name, BYTE **pbuf, int *plen, int is_text);
-static int write_file(char *name, char *buf, long len);
-#define PRINT_NAME_OR_NUM(name, num) name && strlen(name) ? printf("%s", name) : printf("[%d]", num)
+static int read_file(char *name, BYTE **pbuf, size_t *plen, int is_text);
+static int write_file(char *name, BYTE *buf, size_t len);
+#define FPRINT_NAME_OR_NUM(f, name, num) name && strlen(name) ? fprintf(f, "%s", name) : fprintf(f, "[%d]", num)
 
 int
 main(int argc, char **argv)
@@ -106,6 +106,7 @@ main(int argc, char **argv)
 	setlocale(LC_ALL, "");
 
 	init_dblib();	/* need to process params with dbconvert */
+	data->fpout = stdout;
 	if (process_parameters(argc, argv, data, login, paramopts) == FALSE) {
 		goto cleanup;
 	}
@@ -286,7 +287,7 @@ get_datatype(int type) {
 static void
 process_parameter_rpcname(RPCPARAMOPTS *paramopts, char *optarg)
 {
-	size_t len;
+	DBINT len;
 
 	free(paramopts->name);
 
@@ -397,6 +398,16 @@ process_parameter_rpcparam(RPCDATA *data, RPCPARAMOPTS *paramopts, char *optarg)
 	if (paramopts->file) {
 		param->file = strdup(optarg);
 		paramopts->file = 0;
+		if (!strcmp("-", param->file)) {
+			if (!paramopts->null && paramopts->stdincheck++) {
+				fprintf(stderr, "Param %d: stdin can only be selected once\n", data->paramslen);
+				return FALSE;
+			}
+			/* redirect if outputing to stdout */
+			if (param->output) {
+				data->fpout = stderr;
+			}
+		}
 	}
 	if (paramopts->null) {
 		paramopts->null = 0;
@@ -405,20 +416,20 @@ process_parameter_rpcparam(RPCDATA *data, RPCPARAMOPTS *paramopts, char *optarg)
 
 	/* read raw data from file */
 	if (param->file) {
-		return read_file(param->file, &(param->value), &(param->strlen),
+		return read_file(param->file, &(param->value), (size_t *)&(param->strlen),
 			get_datatype(param->type) == DATATYPE_STR);
 	}
 
 	/* set text data as is */
 	if (get_datatype(param->type) == DATATYPE_STR) {
 		param->value = (BYTE *)(strdup(optarg));
-		param->strlen = (int)strlen(optarg);
+		param->strlen = (DBINT)strlen(optarg);
 		return TRUE;
 	}
 
 	/* convert non-text data */
 	if (!dbwillconvert(SYBCHAR, param->type)) {
-		fprintf(stderr, "Can't parse type x%x\n", param->type);
+		fprintf(stderr, "Param %d: can't parse type x%x\n", data->paramslen, param->type);
 		return FALSE;
 	}
 
@@ -429,7 +440,7 @@ process_parameter_rpcparam(RPCDATA *data, RPCPARAMOPTS *paramopts, char *optarg)
 	data_len = dbconvert(NULL, SYBCHAR, (BYTE *)optarg, data_len, param->type, param->value, tmp_data_len);
 
 	if (data_len < 0) {
-		fprintf(stderr, "Error converting param %d \"%s\" to type x%x\n", data->paramslen, optarg, param->type);
+		fprintf(stderr, "Param %d: error converting \"%s\" to type x%x\n", data->paramslen, optarg, param->type);
 		return FALSE;
 	}
 
@@ -609,21 +620,21 @@ print_input_debug(DBPROCESS *dbproc, RPCDATA *data)
 }
 
 static int
-print_columns(DBPROCESS *dbproc)
+fprint_columns(FILE *fpout, DBPROCESS *dbproc)
 {
 	int num_cols = dbnumcols(dbproc);
 	int i;
 
 	for (i=1; i<=num_cols; i++) {
-		PRINT_NAME_OR_NUM((char *)dbcolname(dbproc, i), i);
-		printf(i == num_cols ? "\n" : "\t");
+		FPRINT_NAME_OR_NUM(fpout, (char *)dbcolname(dbproc, i), i);
+		fprintf(fpout, i == num_cols ? "\n" : "\t");
 	}
 
 	return num_cols;
 }
 
 static int
-print_column_or_return(DBPROCESS *dbproc, int colno, int is_ret, char *to_file)
+fprint_column_or_return(FILE *fpout, DBPROCESS *dbproc, int colno, int is_ret, char *to_file)
 {
 	int type;
 	BYTE *data;
@@ -642,8 +653,8 @@ print_column_or_return(DBPROCESS *dbproc, int colno, int is_ret, char *to_file)
 
 	if (to_file) {
 		/* write raw data */
-		printf("(file) %d %s", data_len, to_file);
-		return write_file(to_file, (char *)data, data_len);
+		fprintf(fpout, "(file) %d %s", data_len, to_file);
+		return write_file(to_file, data, data_len);
 	}
 
 	if (!dbwillconvert(type, SYBCHAR)) {
@@ -655,7 +666,7 @@ print_column_or_return(DBPROCESS *dbproc, int colno, int is_ret, char *to_file)
 	tmp_data = xmalloc(tmp_data_len);
 	data_len = dbconvert(NULL, type, data, data_len, SYBCHAR, (BYTE*)tmp_data, -1);
 
-	printf("%s", tmp_data);
+	fprintf(fpout, "%s", tmp_data);
 
 	free(tmp_data);
 
@@ -663,20 +674,20 @@ print_column_or_return(DBPROCESS *dbproc, int colno, int is_ret, char *to_file)
 }
 
 static int
-print_row(DBPROCESS *dbproc, int num_cols)
+fprint_row(FILE *fpout, DBPROCESS *dbproc, int num_cols)
 {
 	int i;
 
 	for (i=1; i<=num_cols; i++) {
-		print_column_or_return(dbproc, i, 0, NULL);
-		printf(i == num_cols ? "\n" : "\t");
+		fprint_column_or_return(fpout, dbproc, i, 0, NULL);
+		fprintf(fpout, i == num_cols ? "\n" : "\t");
 	}
 
 	return num_cols;
 }
 
 static int
-print_returns(DBPROCESS *dbproc, RPCDATA *data)
+fprint_returns(FILE *fpout, DBPROCESS *dbproc, RPCDATA *data)
 {
 	RPCPARAM *param = NULL;
 	int prm_i = -1, i;
@@ -692,10 +703,10 @@ print_returns(DBPROCESS *dbproc, RPCDATA *data)
 			fprintf(stderr, "Internal error: can't find output parameter n°%d\n", i);
 			return FALSE;
 		}
-		PRINT_NAME_OR_NUM(param->name, prm_i);
-		printf(": ");
-		print_column_or_return(dbproc, i, 1, param->file);
-		printf("\n");
+		FPRINT_NAME_OR_NUM(fpout, param->name, prm_i);
+		fprintf(fpout, ": ");
+		fprint_column_or_return(fpout, dbproc, i, 1, param->file);
+		fprintf(fpout, "\n");
 	}
 
 	return num_rets;
@@ -709,8 +720,8 @@ rpc_main(DBPROCESS *dbproc, RPCDATA *data)
 	int num_cols = 0;
 
 	RPCPARAM *param;
-	int i, datalen, status;
-	long maxlen;
+	DBINT datalen, maxlen;
+	int i, status;
 
 	if (data->verbose) {
 		print_input_debug(dbproc, data);
@@ -755,10 +766,10 @@ rpc_main(DBPROCESS *dbproc, RPCDATA *data)
 
 	/* fetch & print results */
 	while (SUCCEED == (ret_code = dbresults(dbproc))) {
-		printf("--------------------\nresult %d\n", ++num_res);
-		num_cols = print_columns(dbproc);
+		fprintf(data->fpout, "--------------------\nresult %d\n", ++num_res);
+		num_cols = fprint_columns(data->fpout, dbproc);
 		while(NO_MORE_ROWS != dbnextrow(dbproc)) {
-			print_row(dbproc, num_cols);
+			fprint_row(data->fpout, dbproc, num_cols);
 		};
 	}
 	if (ret_code != SUCCEED && ret_code != NO_MORE_RESULTS) {
@@ -768,9 +779,9 @@ rpc_main(DBPROCESS *dbproc, RPCDATA *data)
 	if (dbhasretstat(dbproc)) {
 		data->status = dbretstatus(dbproc);
 	}
-	printf("--------------------\nreturns\n");
-	print_returns(dbproc, data);
-	printf("status: %d\n", data->status);
+	fprintf(data->fpout, "--------------------\nreturns\n");
+	fprint_returns(data->fpout, dbproc, data);
+	fprintf(data->fpout, "status: %d\n", data->status);
 
 	return TRUE;
 }
@@ -1007,37 +1018,37 @@ free_data_paramsvalue(RPCDATA *data)
 }
 
 static int
-read_file(char *name, BYTE **pbuf, int *plen, int is_text)
+read_file(char *name, BYTE **pbuf, size_t *plen, int is_text)
 {
 	FILE *fp;
-	long len;
+	char *buf = NULL;
+	size_t len = 0;
 	size_t ok;
-	char *buf;
-	int maxlen = is_text ? MAX_TEXTSIZE : MAX_BYTESIZE;
+	char tmp[1048576L];
+	size_t maxlen = is_text ? MAX_TEXTSIZE : MAX_BYTESIZE;
 
-	fp = fopen(name, "rb");
-	if (!fp) {
-		fprintf(stderr, "Can't open input param file: %s\n", name);
-		return FALSE;
-	}
-	fseek(fp, 0, SEEK_END);
-	len = ftell(fp);
-	fseek(fp, 0, SEEK_SET);
-
-	if (len > maxlen) {
-		fprintf(stderr, "input file truncated to %d\n", maxlen);
-		len = maxlen;
+	if (!strcmp("-", name)) {
+		fp = stdin;
+	} else {
+		fp = fopen(name, "rb");
+		if (!fp) {
+			fprintf(stderr, "Can't open input param file: %s\n", name);
+			return FALSE;
+		}
 	}
 
-	buf = xmalloc(len + 1);
-	ok = len ? fread(buf, len, 1, fp) : 1;
-	fclose(fp);
-
-	buf[len] = 0;
-
-	if (!ok) {
-		fprintf(stderr, "Error reading file %s\n", name);
+	while((ok = fread(tmp, 1, 1048576L, fp))) {
+		if (len + ok > maxlen)
+			ok = maxlen - len;
+		buf = xrealloc(buf, len + ok);
+		memcpy(buf + len, tmp, ok);
+		len += (int)ok;
+		if (len >= maxlen)
+			break;
 	}
+
+	if (fp != stdin)
+		fclose(fp);
 
 	/* pad fixed length data */
 	if (!is_text && len < maxlen) {
@@ -1052,22 +1063,27 @@ read_file(char *name, BYTE **pbuf, int *plen, int is_text)
 }
 
 static int
-write_file(char *name, char *buf, long len)
+write_file(char *name, BYTE *buf, size_t len)
 {
 	FILE *fp;
 	size_t ok;
 
-	fp = fopen(name, "wb");
-	if (!fp) {
-		fprintf(stderr, "Can't open output param file: %s\n", name);
-		return FALSE;
+	if (!strcmp("-", name)) {
+		fp = stdout;
+	} else {
+		fp = fopen(name, "wb");
+		if (!fp) {
+			fprintf(stderr, "Can't open output param file: %s\n", name);
+			return FALSE;
+		}
 	}
-	ok = len ? fwrite(buf, len, 1, fp) : 1;
-	fclose(fp);
 
-	if (!ok) {
+	ok = len ? fwrite(buf, len, 1, fp) : 1;
+	if (fp != stdout)
+		fclose(fp);
+
+	if (!ok)
 		fprintf(stderr, "Error writing file %s\n", name);
-	}
 
 	return TRUE;
 }

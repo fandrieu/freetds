@@ -66,7 +66,7 @@ Parameter's
 .Ar param_value
 is a file name. Raw data for
 .Ar param_type
-will be read from and/or written to that file.
+will be read from and/or written to that file. If - is specfied stdin/stdout will be used instead.
 .It Fl N
 Ignore
 .Ar param_value
@@ -134,6 +134,9 @@ sp_executesql -S mssql -t ntext -p "select @a" -p "@a char(4)" -n @a -t char -p 
 .Pp
 .Nm
 sp_executesql -S mssql -p "set @b=upper(@a)" -p "@a char(4),@b char(4) out" -p test -oNfp upper.txt
+.Pp
+.Nm
+sp_executesql -S mssql -p "set @a=upper(@a)" -p "@a varchar(max) out" -t text -ofp -
 .\"
 .Sh EXIT STATUS
 .Nm
@@ -141,6 +144,9 @@ exits with the procedure return code on success and 1 on error.
 .Sh NOTES
 Resultsets returned are printed to standard output as tab separated data,
 then parameters output values one by line. That last line shows the return code.
+.Pp
+If an output parameter is set to stdout, results will be printed to stderr instead. Note that
+several output parameters can be set to stdout, their values will be concatenated in order.
 .\"
 .Sh HISTORY
 .Nm
