@@ -1,4 +1,6 @@
 #define RPCPARAM_DEFAULTTYPE SYBVARCHAR
+#define MAX_TEXTSIZE 2147483647
+#define MAX_BYTESIZE 8
 
 enum rpc_datatype {
 	DATATYPE_STR,
@@ -28,8 +30,8 @@ typedef struct rpc_data
 	char *spname;
 	RPCPARAM **params;
 	int paramslen;
+	int status;
 	int verbose;
-	int textsize;
 }
 RPCDATA;
 
@@ -54,5 +56,6 @@ typedef struct rpc_login
 	char *charset;
 	char *version;
 	int packetsize;
+	int textsize;
 }
 RPCLOGIN;

@@ -103,8 +103,6 @@ The name of the Database Server to which to connect.
 For text or image columns, set the maximum number of characters to
 request from the server. Defaults to the setting in
 .Pa freetds.conf .
-If
-not specified anywhere, defaults to the full size of the data.
 .It Fl U Ar username
 A database login name.  For TDS\ 7+ connections, a domain login is attempted
 if 
@@ -137,6 +135,9 @@ sp_executesql -S mssql -t ntext -p "select @a" -p "@a char(4)" -n @a -t char -p 
 .Nm
 sp_executesql -S mssql -p "set @b=upper(@a)" -p "@a char(4),@b char(4) out" -p test -oNfp upper.txt
 .\"
+.Sh EXIT STATUS
+.Nm
+exits with the procedure return code on success and 1 on error.
 .Sh NOTES
 Resultsets returned are printed to standard output as tab separated data,
 then parameters output values one by line. That last line shows the return code.
@@ -151,3 +152,4 @@ utility was written by
 .An Frank Andrieu Ns .
 .Sh BUGS
 Datatype support depends on server and protocol version, some combinations trigger errors.
+Data read from file is not checked and may result in a convertion error.

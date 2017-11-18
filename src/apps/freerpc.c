@@ -62,6 +62,7 @@
 
 static int process_parameters(int argc, char **argv, RPCDATA *data, RPCLOGIN *login, RPCPARAMOPTS *paramopts);
 static enum rpc_datatype get_datatype(int type);
+static void process_parameter_rpcname(RPCPARAMOPTS *paramopts, char *optarg);
 static int process_parameter_rpctype(RPCPARAMOPTS *paramopts, char *optarg);
 static int process_parameter_rpcparam(RPCDATA *data, RPCPARAMOPTS *paramopts, char *optarg);
 static int init_dblib(void);
@@ -89,7 +90,7 @@ static int free_data(RPCDATA *data);
 static int free_data_paramsvalue(RPCDATA *data);
 
 static char *to_lowercase(char *s);
-static int read_file(char *name, BYTE **pbuf, int *plen, int maxlen);
+static int read_file(char *name, BYTE **pbuf, int *plen, int is_text);
 static int write_file(char *name, char *buf, long len);
 #define PRINT_NAME_OR_NUM(name, num) name && strlen(name) ? printf("%s", name) : printf("[%d]", num)
 
@@ -105,7 +106,6 @@ main(int argc, char **argv)
 	setlocale(LC_ALL, "");
 
 	init_dblib();	/* need to process params with dbconvert */
-	data->textsize = 2147483647;	/* our default text size is the LARGEST */
 	if (process_parameters(argc, argv, data, login, paramopts) == FALSE) {
 		goto cleanup;
 	}
@@ -113,7 +113,7 @@ main(int argc, char **argv)
 	if (login_to_database(&dbproc, login) == FALSE) {
 		goto cleanup;
 	}
-	if (set_login_options(dbproc, login->options, data->textsize) == FALSE) {
+	if (set_login_options(dbproc, login->options, login->textsize) == FALSE) {
 		goto cleanup;
 	}
 
@@ -127,7 +127,7 @@ cleanup:
 	free_paramopts(paramopts);
 	free_login(login);
 	free_data(data);
-	exit(ok ? EXIT_SUCCESS : EXIT_FAILURE);
+	exit(ok ? data->status : EXIT_FAILURE);
 
 	return 0;
 }
@@ -147,24 +147,35 @@ process_parameters(int argc, char **argv, RPCDATA *data,
 	}
 
 	/* argument 1 - the stored procedure name */
+	optind = 2; /* start processing options after spname */
 	data->spname = strdup(argv[1]);
 	if (data->spname == NULL) {
 		fprintf(stderr, "Out of memory!\n");
 		return FALSE;
 	}
+	/* "exec" shortcut: calls sp_executesql with the next two args */
+	if (strcmp(data->spname, "exec") == 0) {
+		if (argc < 4) {
+			print_usage();
+			return (FALSE);
+		}
+		optind += 2;
+		free(data->spname);
+		data->spname = strdup("sp_executesql");
+		process_parameter_rpctype(paramopts, "ntext");
+		process_parameter_rpcparam(data, paramopts, argv[2]);
+		process_parameter_rpcparam(data, paramopts, argv[3]);
+		process_parameter_rpctype(paramopts, "default");
+	}
 
 	/*
 	 * Get the rest of the arguments
 	 */
-	optind = 2; /* start processing options after spname */
 	while ((ch = getopt(argc, argv, "p:n:ft:oNU:P:I:S:T:A:V:O:0:C:vD:")) != -1) {
 		switch (ch) {
 		/* global */
 		case 'v':
 			data->verbose++;
-			break;
-		case 'T':
-			data->textsize = atoi(optarg);
 			break;
 		/* rpc params */
 		case 'p':
@@ -179,8 +190,7 @@ process_parameters(int argc, char **argv, RPCDATA *data,
 			paramopts->null = 1;
 			break;
 		case 'n':
-			free(paramopts->name);
-			paramopts->name = strdup(optarg);
+			process_parameter_rpcname(paramopts, optarg);
 			break;
 		case 'f':
 			paramopts->file = 1;
@@ -211,6 +221,9 @@ process_parameters(int argc, char **argv, RPCDATA *data,
 			break;
 		case 'A':
 			login->packetsize = atoi(optarg);
+			break;
+		case 'T':
+			login->textsize = atoi(optarg);
 			break;
 		case 'C':
 			login->charset = strdup(optarg);
@@ -268,6 +281,24 @@ get_datatype(int type) {
 		default:
 			return DATATYPE_STR;
 	}
+}
+
+static void
+process_parameter_rpcname(RPCPARAMOPTS *paramopts, char *optarg)
+{
+	size_t len;
+
+	free(paramopts->name);
+
+	if (optarg[0] == '@') {
+		paramopts->name = strdup(optarg);
+		return;
+	}
+
+	len = strlen(optarg);
+	paramopts->name = xmalloc(len+2);
+	paramopts->name[0] = '@';
+	memcpy(paramopts->name + 1, optarg, len + 1);
 }
 
 static int
@@ -374,7 +405,8 @@ process_parameter_rpcparam(RPCDATA *data, RPCPARAMOPTS *paramopts, char *optarg)
 
 	/* read raw data from file */
 	if (param->file) {
-		return read_file(param->file, &(param->value), &(param->strlen), data->textsize);
+		return read_file(param->file, &(param->value), &(param->strlen),
+			get_datatype(param->type) == DATATYPE_STR);
 	}
 
 	/* set text data as is */
@@ -390,7 +422,7 @@ process_parameter_rpcparam(RPCDATA *data, RPCPARAMOPTS *paramopts, char *optarg)
 		return FALSE;
 	}
 
-	tmp_data_len = 8;	/* fixed length types */
+	tmp_data_len = MAX_BYTESIZE;
 	param->value = xmalloc(tmp_data_len);
 	memset(param->value, 0, tmp_data_len);
 	data_len = (int)strlen(optarg);
@@ -466,9 +498,8 @@ login_to_database(DBPROCESS **pdbproc, RPCLOGIN *login)
 	if (login->charset)
 		DBSETLCHARSET(loginrec, login->charset);
 
-	if (login->packetsize && login->packetsize > 0) {
+	if (login->packetsize && login->packetsize > 0)
 		DBSETLPACKET(loginrec, login->packetsize);
-	}
 
 	if (login->dbname)
 		DBSETLDBNAME(loginrec, login->dbname);
@@ -699,6 +730,7 @@ rpc_main(DBPROCESS *dbproc, RPCDATA *data)
 		if (DATATYPE_STR == get_datatype(param->type)) {
 			datalen = param->strlen;
 			if (param->output) {
+				/* blob types are limited by textsize, not by this */
 				maxlen = 8000;
 			}
 		}
@@ -733,9 +765,12 @@ rpc_main(DBPROCESS *dbproc, RPCDATA *data)
 		fprintf(stderr, "dbresults failed\n");
 		return FALSE;
 	}
+	if (dbhasretstat(dbproc)) {
+		data->status = dbretstatus(dbproc);
+	}
 	printf("--------------------\nreturns\n");
 	print_returns(dbproc, data);
-	printf("status: %d\n", dbretstatus(dbproc));
+	printf("status: %d\n", data->status);
 
 	return TRUE;
 }
@@ -745,7 +780,11 @@ set_login_options(DBPROCESS *dbproc, char *options, int textsize)
 {
 	RETCODE fOK;
 
-	if (dbfcmd(dbproc, "set textsize %d ", textsize) == FAIL) {
+	if (!textsize && !options) {
+		return TRUE;
+	}
+
+	if (textsize && dbfcmd(dbproc, "set textsize %d ", textsize) == FAIL) {
 		fprintf(stderr, "set_login_options() could not set textsize at %s:%d\n", __FILE__, __LINE__);
 		return FALSE;
 	}
@@ -968,12 +1007,14 @@ free_data_paramsvalue(RPCDATA *data)
 }
 
 static int
-read_file(char *name, BYTE **pbuf, int *plen, int maxlen)
+read_file(char *name, BYTE **pbuf, int *plen, int is_text)
 {
 	FILE *fp;
 	long len;
 	size_t ok;
 	char *buf;
+	int maxlen = is_text ? MAX_TEXTSIZE : MAX_BYTESIZE;
+
 	fp = fopen(name, "rb");
 	if (!fp) {
 		fprintf(stderr, "Can't open input param file: %s\n", name);
@@ -983,7 +1024,6 @@ read_file(char *name, BYTE **pbuf, int *plen, int maxlen)
 	len = ftell(fp);
 	fseek(fp, 0, SEEK_SET);
 
-	/* TODO: check fixed length... */
 	if (len > maxlen) {
 		fprintf(stderr, "input file truncated to %d\n", maxlen);
 		len = maxlen;
@@ -997,6 +1037,12 @@ read_file(char *name, BYTE **pbuf, int *plen, int maxlen)
 
 	if (!ok) {
 		fprintf(stderr, "Error reading file %s\n", name);
+	}
+
+	/* pad fixed length data */
+	if (!is_text && len < maxlen) {
+		buf = xrealloc(buf, maxlen);
+		memset(buf + len, 0, maxlen - len);
 	}
 
 	*pbuf = (BYTE *)buf;
