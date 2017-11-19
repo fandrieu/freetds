@@ -41,7 +41,17 @@ referenced for more detailed information on rpc functionality.
 .Sh PROCEDURE\ AND\ PARAMETERS
 .Bl -tag -width indent
 .It Ar procedure_name
-The name of the procedure to execute, mandatory.
+The name of the procedure to execute, mandatory. Some reserved sql words are interpreted:
+ -
+.Sy exec
+is a shortcut for
+.Sy sp_executesql
+ -
+.Sy proc
+is an alternative to
+.Sy exec ,
+using a temporary procedure. See
+.Sy NOTES .
 .It Fl p Ar param_value
 Add a parameter and set its value.  This is optional and can be repeated as needed.
 The text
@@ -50,8 +60,8 @@ will be converted to
 .Ar param_type
 using DB-Library if needed.
 The parameter's properties can be modified by setting the following options
-.Pa before
-.Fl p:
+.Sy before
+.Fl p :
 .El
 .\"
 .Sh PARAMETER MODIFIERS
@@ -127,7 +137,7 @@ Be more verbose.
 default 
 .Ar servername
 .\"
-.Sh EXAMPLE
+.Sh EXAMPLES
 .Pp
 .Nm
 sp_help -p sp_help -S mssql -U guest -P password -v
@@ -136,10 +146,10 @@ sp_help -p sp_help -S mssql -U guest -P password -v
 sp_executesql -S mssql -t ntext -p "select @a" -p "@a char(4)" -n @a -t char -p test
 .Pp
 .Nm
-sp_executesql -S mssql -p "set @b=upper(@a)" -p "@a char(4),@b char(4) out" -p test -oNfp upper.txt
+exec -S mssql -p "set @b=upper(@a)" -p "@a char(4),@b char(4) out" -p test -oNfp upper.txt
 .Pp
 .Nm
-sp_executesql -S mssql -p "set @a=upper(@a)" -p "@a varchar(max) out" -t text -ofp -
+proc -S mssql -p "set @a=upper(@a)" -p "@a varchar(max) out" -t text -ofp -
 .\"
 .Sh EXIT STATUS
 .Nm
@@ -150,6 +160,14 @@ then parameters output values one by line. That last line shows the return code.
 .Pp
 If an output parameter is set to stdout, results will be printed to stderr instead. Note that
 several output parameters can be set to stdout, their values will be concatenated in order.
+.Pp
+If
+.Ar procedure_name
+is set to
+.Sy proc ,
+a temporary stored procedure is created and then called.
+The firt two parameters must be the sql statement to execute and the variables declaration
+(the same syntax as sp_executesql).
 .\"
 .Sh HISTORY
 .Nm

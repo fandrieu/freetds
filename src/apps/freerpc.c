@@ -69,6 +69,7 @@ static int process_parameter_rpctype(RPCPARAMOPTS *paramopts, char *optarg);
 static int process_parameter_rpcparam(RPCDATA *data, RPCPARAMOPTS *paramopts, char *optarg);
 static int init_dblib(void);
 static int login_to_database(DBPROCESS **pdbproc, RPCLOGIN *login);
+static int setup_temp_proc(DBPROCESS *dbproc, RPCDATA *data);
 static int set_login_options(DBPROCESS *dbproc, char *options, int textsize);
 static int sql_exec_skip(DBPROCESS *pdbproc);
 static void print_usage(void);
@@ -157,20 +158,6 @@ process_parameters(int argc, char **argv, RPCDATA *data,
 	if (data->spname == NULL) {
 		fprintf(stderr, "Out of memory!\n");
 		return FALSE;
-	}
-	/* "exec" shortcut: calls sp_executesql with the next two args */
-	if (strcmp(data->spname, "exec") == 0) {
-		if (argc < 4) {
-			print_usage();
-			return (FALSE);
-		}
-		optind += 2;
-		free(data->spname);
-		data->spname = strdup("sp_executesql");
-		process_parameter_rpctype(paramopts, "ntext");
-		process_parameter_rpcparam(data, paramopts, argv[2]);
-		process_parameter_rpcparam(data, paramopts, argv[3]);
-		process_parameter_rpctype(paramopts, "default");
 	}
 
 	/*
@@ -747,6 +734,16 @@ rpc_main(DBPROCESS *dbproc, RPCDATA *data)
 		print_input_debug(dbproc, data);
 	}
 
+	/* "exec": shortcut for sp_executesql */
+	if (!strcmp(data->spname, "exec")) {
+		free(data->spname);
+		data->spname = strdup("sp_executesql");
+	}
+	/* "proc": create a temp proc and run it */
+	else if (!strcmp(data->spname, "proc") && !setup_temp_proc(dbproc, data)) {
+		return FALSE;
+	}
+
 	/* rpc init: ->spname */
 	if (FAIL == dbrpcinit(dbproc, data->spname, 0)) {
 		fprintf(stderr, "dbrpcinit failed\n");
@@ -802,6 +799,49 @@ rpc_main(DBPROCESS *dbproc, RPCDATA *data)
 	fprintf(data->fpout, "--------------------\nreturns\n");
 	fprint_returns(data->fpout, dbproc, data);
 	fprintf(data->fpout, "status: %d\n", data->status);
+
+	return TRUE;
+}
+
+static int
+setup_temp_proc(DBPROCESS *dbproc, RPCDATA *data)
+{
+	int i;
+	RPCPARAM **params;
+	char *spname = "#freerpc_temp";
+
+	if (data->paramslen < 2) {
+		fprintf(stderr, "'proc' requires 2 parameters\n");
+		return FALSE;
+	}
+
+	/* will exec temp proc */
+	free(data->spname);
+	data->spname = strdup(spname);
+
+	/* setup a temp proc with the first 2 params */
+	dbfcmd(dbproc, "create proc %s %s as %s", spname,
+		(char *)((data->params[1])->value),
+		(char *)((data->params[0])->value)
+	);
+
+	if (!sql_exec_skip(dbproc)) {
+		fprintf(stderr, "Can't create temp proc\n");
+		return FALSE;
+	}
+
+	/* pop first 2 params */
+	params = data->params;
+	free_data_param(params[0]);
+	free_data_param(params[1]);
+	data->paramslen -= 2;
+	if (data->paramslen) {
+		data->params = xmalloc(data->paramslen * sizeof(RPCPARAM*));
+		for (i=0; i<data->paramslen; i++) {
+			data->params[i] = params[i+2];
+		}
+	}
+	free(params);
 
 	return TRUE;
 }
