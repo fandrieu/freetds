@@ -62,6 +62,8 @@
 
 static int process_parameters(int argc, char **argv, RPCDATA *data, RPCLOGIN *login, RPCPARAMOPTS *paramopts);
 static enum rpc_datatype get_datatype(int type);
+static int is_fixed_length(int type);
+#define IS_TEXT(type) get_datatype(type) == DATATYPE_STR
 static void process_parameter_rpcname(RPCPARAMOPTS *paramopts, char *optarg);
 static int process_parameter_rpctype(RPCPARAMOPTS *paramopts, char *optarg);
 static int process_parameter_rpcparam(RPCDATA *data, RPCPARAMOPTS *paramopts, char *optarg);
@@ -263,24 +265,52 @@ process_parameters(int argc, char **argv, RPCDATA *data,
 static enum rpc_datatype
 get_datatype(int type) {
 	switch(type) {
+		case SYBCHAR:
+		case SYBVARCHAR:
+		case SYBNVARCHAR:
+		case SYBTEXT:
+		case SYBNTEXT:
+		case SYBBINARY:
+		case SYBVARBINARY:
+		case SYBIMAGE:
+			return DATATYPE_STR;
+		case SYBINT1:
+		case SYBINT2:
+		case SYBINT4:
+		case SYBINT8:
+		case SYBINTN:
+		case SYBBIT:
+		case SYBBITN:
+			return DATATYPE_LONG;
+		case SYBFLT8:
+		case SYBFLTN:
+		case SYBREAL:
+			return DATATYPE_DOUBLE;
+		default:
+			return DATATYPE_BYTES;
+	}
+}
+
+static int
+is_fixed_length(int type)
+{
+	switch(type) {
 		case SYBINT1:
 		case SYBINT2:
 		case SYBINT4:
 		case SYBINT8:
 		case SYBBIT:
-			return DATATYPE_LONG;
-		case SYBFLT8:
 		case SYBREAL:
-			return DATATYPE_DOUBLE;
+		case SYBFLT8:
 		case SYBMONEY4:
 		case SYBMONEY:
 		case SYBDATETIME4:
 		case SYBDATETIME:
 		case SYBDATE:
 		case SYBTIME:
-			return DATATYPE_BYTES;
+			return 1;
 		default:
-			return DATATYPE_STR;
+			return 0;
 	}
 }
 
@@ -320,31 +350,31 @@ process_parameter_rpctype(RPCPARAMOPTS *paramopts, char *optarg)
 		{"varbinary", SYBVARBINARY},
 		{"image", SYBIMAGE},
 		{"bit", SYBBIT},
-		/* {"bitn", SYBBITN},	needs len */
+		{"bitn", SYBBITN},
 		{"int1", SYBINT1},
 		{"int2", SYBINT2},
 		{"int4", SYBINT4},
 		{"int8", SYBINT8},
-		/* {"intn", SYBINTN},	needs len */
+		{"intn", SYBINTN},
 		{"money4", SYBMONEY4},
 		{"money", SYBMONEY},
-		{"flt8", SYBFLT8},
+		{"moneyn", SYBMONEYN},
 		{"real", SYBREAL},
-		/* {"moneyn", SYBMONEYN},	needs len */
-		/* {"decimal", SYBDECIMAL},	needs len */
-		/* {"numeric", SYBNUMERIC},	needs len */
-		/* {"fltn", SYBFLTN},	needs len */
+		{"flt8", SYBFLT8},
+		{"fltn", SYBFLTN},
+		/* {"decimal", SYBDECIMAL}, FIXME */
+		/* {"numeric", SYBNUMERIC}, FIXME */
 		{"datetime4", SYBDATETIME4},
 		{"datetime", SYBDATETIME},
-		/* {"datetimn", SYBDATETIMN},	needs len */
+		{"datetimn", SYBDATETIMN},
 		{"date", SYBDATE},
 		{"time", SYBTIME},
-		/* {"bigdatetime", SYBBIGDATETIME},	needs len */
-		/* {"bigtime", SYBBIGTIME},	needs len */
-		/* {"msdate", SYBMSDATE},	needs len */
-		/* {"mstime", SYBMSTIME},	needs len */
-		/* {"msdatetime2", SYBMSDATETIME2},	needs len */
-		/* {"msdatetimeoffset", SYBMSDATETIMEOFFSET},	needs len */
+		{"bigdatetime", SYBBIGDATETIME},
+		{"bigtime", SYBBIGTIME},
+		{"msdate", SYBMSDATE},
+		{"mstime", SYBMSTIME},
+		{"msdatetime2", SYBMSDATETIME2},
+		{"msdatetimeoffset", SYBMSDATETIMEOFFSET}
 	};
 	int typeslen = sizeof(types)/sizeof(types[0]);
 
@@ -373,7 +403,7 @@ static int
 process_parameter_rpcparam(RPCDATA *data, RPCPARAMOPTS *paramopts, char *optarg)
 {
 	RPCPARAM *param;
-	int data_len, tmp_data_len;
+	size_t valuelen;
 
 	if (!data->paramslen) {
 		data->paramslen = 1;
@@ -416,30 +446,28 @@ process_parameter_rpcparam(RPCDATA *data, RPCPARAMOPTS *paramopts, char *optarg)
 
 	/* read raw data from file */
 	if (param->file) {
-		return read_file(param->file, &(param->value), (size_t *)&(param->strlen),
-			get_datatype(param->type) == DATATYPE_STR);
+		return read_file(param->file, &(param->value), (size_t *)&(param->valuelen), IS_TEXT(param->type));
 	}
 
 	/* set text data as is */
-	if (get_datatype(param->type) == DATATYPE_STR) {
+	if (IS_TEXT(param->type)) {
 		param->value = (BYTE *)(strdup(optarg));
-		param->strlen = (DBINT)strlen(optarg);
+		param->valuelen = (DBINT)strlen(optarg);
 		return TRUE;
 	}
 
 	/* convert non-text data */
 	if (!dbwillconvert(SYBCHAR, param->type)) {
-		fprintf(stderr, "Param %d: can't parse type x%x\n", data->paramslen, param->type);
+		fprintf(stderr, "Param %d: can't convert type x%x\n", data->paramslen, param->type);
 		return FALSE;
 	}
 
-	tmp_data_len = MAX_BYTESIZE;
-	param->value = xmalloc(tmp_data_len);
-	memset(param->value, 0, tmp_data_len);
-	data_len = (int)strlen(optarg);
-	data_len = dbconvert(NULL, SYBCHAR, (BYTE *)optarg, data_len, param->type, param->value, tmp_data_len);
+	valuelen = MAX_BYTESIZE;
+	param->value = xcalloc(valuelen);
+	param->valuelen = dbconvert(NULL, SYBCHAR, (BYTE *)optarg, (int)strlen(optarg),
+		param->type, param->value, valuelen);
 
-	if (data_len < 0) {
+	if (param->valuelen < 0) {
 		fprintf(stderr, "Param %d: error converting \"%s\" to type x%x\n", data->paramslen, optarg, param->type);
 		return FALSE;
 	}
@@ -541,7 +569,7 @@ login_to_database(DBPROCESS **pdbproc, RPCLOGIN *login)
 static int
 print_input_debug(DBPROCESS *dbproc, RPCDATA *data)
 {
-	int i;
+	int i, b;
 	RPCPARAM *param;
 
 	const RPCKEYVAL versions[] = {
@@ -572,46 +600,37 @@ print_input_debug(DBPROCESS *dbproc, RPCDATA *data)
 	fprintf(stderr, ", params:\n");
 	for (i=0; i<data->paramslen; i++) {
 		param = data->params[i];
-		fprintf(
-			stderr,
-			"%3d %s: type x%x, out %d, value ",
-			i,
-			param->name,
-			param->type,
-			param->output
-		);
+		fprintf(stderr, "%3d %s: type x%x, out %d, len%5d ",
+			i, param->name, param->type, param->output, param->valuelen);
 		if (param->value == NULL) {
 			fprintf(stderr, "(null)\n");
 			continue;
 		}
 		switch(get_datatype(param->type)) {
 			case DATATYPE_LONG:
-				fprintf(stderr, "(long) %lld\n", *((long long *)param->value));
+				fprintf(stderr, "(int) %lld\n", *((long long *)param->value));
 				break;
 			case DATATYPE_DOUBLE:
-				fprintf(stderr, "(double) %f\n", *((double *)param->value));
+				fprintf(stderr, "(float) %f\n", *((double *)param->value));
 				break;
 			case DATATYPE_BYTES:
-				fprintf(
-					stderr, "(bytes) %02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x\n",
-					param->value[0], param->value[1], param->value[2], param->value[3],
-					param->value[4], param->value[5], param->value[6], param->value[7]
-				);
+				fprintf(stderr, "(bytes) ");
+				for (b=0; b<param->valuelen; b++)
+					fprintf(stderr, "%s%02x", b?":":"", param->value[b]);
+				fprintf(stderr, "\n");
 				break;
 			default:
-				if (param->file) {
-					fprintf(stderr, "(file) %d %s\n", param->strlen, param->file);
-				} else {
-					fprintf(stderr, "(char*) %d %s\n", param->strlen, (char *)param->value);
-				}
+				if (param->file)
+					fprintf(stderr, "(file) %s\n", param->file);
+				else	/* FIXME: binary types */
+					fprintf(stderr, "(string) %s\n", (char *)param->value);
 		}
 	}
 
 	verint = dbtds(dbproc);
 	for(i=0; i<versionslen; i++) {
-		if(verint == versions[i].value) {
+		if(verint == versions[i].value)
 			vertext = versions[i].key;
-		}
 	}
 
 	fprintf(stderr, "tds version %s (%d), %s\n", vertext, verint, dbversion());
@@ -736,10 +755,10 @@ rpc_main(DBPROCESS *dbproc, RPCDATA *data)
 	/* rpc bind: ->params */
 	for (i=0; i<data->paramslen; i++) {
 		param = data->params[i];
-		maxlen = datalen = -1;
-		status = param->output;
-		if (DATATYPE_STR == get_datatype(param->type)) {
-			datalen = param->strlen;
+		datalen = maxlen = -1;
+		status = param->output ? DBRPCRETURN : 0;
+		if (!is_fixed_length(param->type)) {
+			datalen = param->valuelen;
 			if (param->output) {
 				/* blob types are limited by textsize, not by this */
 				maxlen = 8000;
@@ -1050,7 +1069,7 @@ read_file(char *name, BYTE **pbuf, size_t *plen, int is_text)
 	if (fp != stdin)
 		fclose(fp);
 
-	/* pad fixed length data */
+	/* debug: pad fixed length data */
 	if (!is_text && len < maxlen) {
 		buf = xrealloc(buf, maxlen);
 		memset(buf + len, 0, maxlen - len);

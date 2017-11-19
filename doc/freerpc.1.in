@@ -52,6 +52,7 @@ using DB-Library if needed.
 The parameter's properties can be modified by setting the following options
 .Pa before
 .Fl p:
+.El
 .\"
 .Sh PARAMETER MODIFIERS
 .Bl -tag -width indent
@@ -73,6 +74,7 @@ Ignore
 and send NULL instead.  This is useful for output parameters, especially when outputing to file.
 .Ar param_value
 still needs to be provided.
+.El
 .\"
 .Sh CONNECTION
 .Bl -tag -width indent
@@ -118,6 +120,7 @@ Specify the TDS protocol versions to use, overriding
 .Bl -tag -width indent
 .It Fl v
 Be more verbose.
+.El
 .\"
 .Sh ENVIRONMENT
 .Ev DSQUERY
@@ -158,4 +161,7 @@ utility was written by
 .An Frank Andrieu Ns .
 .Sh BUGS
 Datatype support depends on server and protocol version, some combinations trigger errors.
-Data read from file is not checked and may result in a convertion error.
+.Pp
+intn/fltn/... types can't be parsed from the command line, use a fixed size variant.
+.Pp
+Data read from file is not checked and may result in a conversion error.

@@ -1,12 +1,13 @@
 #define RPCPARAM_DEFAULTTYPE SYBVARCHAR
 #define MAX_TEXTSIZE 2147483647
-#define MAX_BYTESIZE 8
+#define MAX_BYTESIZE 16
 
+/* internal param type used for allocating and printing debug */
 enum rpc_datatype {
-	DATATYPE_STR,
-	DATATYPE_LONG,
-	DATATYPE_DOUBLE,
-	DATATYPE_BYTES
+	DATATYPE_STR,    /* textsize, dbg %s */
+	DATATYPE_LONG,   /* bytesize, dbg %lld */
+	DATATYPE_DOUBLE, /* bytesize, dbg %f */
+	DATATYPE_BYTES,  /* bytesize, dbg %x */
 };
 
 typedef struct rpc_keyval {
@@ -21,7 +22,7 @@ typedef struct rpc_data_param
 	unsigned int output:1;
 	char *file;
 	BYTE *value;
-	DBINT strlen;
+	DBINT valuelen;
 }
 RPCPARAM;
 
