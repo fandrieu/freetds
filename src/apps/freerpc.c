@@ -70,6 +70,7 @@ static int process_parameter_rpcparam(RPCDATA *data, RPCPARAMOPTS *paramopts, ch
 static int init_dblib(void);
 static int login_to_database(DBPROCESS **pdbproc, RPCLOGIN *login);
 static int set_login_options(DBPROCESS *dbproc, char *options, int textsize);
+static int sql_exec_skip(DBPROCESS *pdbproc);
 static void print_usage(void);
 static int print_input_debug(DBPROCESS *dbproc, RPCDATA *data);
 
@@ -86,10 +87,11 @@ static int msg_handler(DBPROCESS *dbproc, DBINT msgno, int msgstate, int severit
 static void *xmalloc(size_t s);
 static void *xcalloc(size_t s);
 static void *xrealloc(void *p, size_t s);
-static int free_paramopts(RPCPARAMOPTS *paramopts);
-static int free_login(RPCLOGIN *login);
-static int free_data(RPCDATA *data);
-static int free_data_paramsvalue(RPCDATA *data);
+static void free_paramopts(RPCPARAMOPTS *paramopts);
+static void free_login(RPCLOGIN *login);
+static void free_data_param(RPCPARAM *param);
+static void free_data(RPCDATA *data);
+static void free_data_paramsvalue(RPCDATA *data);
 
 static char *to_lowercase(char *s);
 static int read_file(char *name, BYTE **pbuf, size_t *plen, int is_text);
@@ -737,7 +739,6 @@ rpc_main(DBPROCESS *dbproc, RPCDATA *data)
 	RETCODE ret_code = 0;
 	int num_res = 0;
 	int num_cols = 0;
-
 	RPCPARAM *param;
 	DBINT datalen, maxlen;
 	int i, status;
@@ -784,14 +785,14 @@ rpc_main(DBPROCESS *dbproc, RPCDATA *data)
 	free_data_paramsvalue(data);
 
 	/* fetch & print results */
-	while (SUCCEED == (ret_code = dbresults(dbproc))) {
+	while ((ret_code = dbresults(dbproc)) == SUCCEED) {
 		fprintf(data->fpout, "--------------------\nresult %d\n", ++num_res);
 		num_cols = fprint_columns(data->fpout, dbproc);
-		while(NO_MORE_ROWS != dbnextrow(dbproc)) {
+		while(dbnextrow(dbproc) != NO_MORE_ROWS) {
 			fprint_row(data->fpout, dbproc, num_cols);
 		};
 	}
-	if (ret_code != SUCCEED && ret_code != NO_MORE_RESULTS) {
+	if (ret_code == FAIL) {
 		fprintf(stderr, "dbresults failed\n");
 		return FALSE;
 	}
@@ -808,8 +809,6 @@ rpc_main(DBPROCESS *dbproc, RPCDATA *data)
 static int
 set_login_options(DBPROCESS *dbproc, char *options, int textsize)
 {
-	RETCODE fOK;
-
 	if (!textsize && !options) {
 		return TRUE;
 	}
@@ -850,24 +849,28 @@ set_login_options(DBPROCESS *dbproc, char *options, int textsize)
 		}
 	}
 
+	if (!sql_exec_skip(dbproc)) {
+		fprintf(stderr, "set_login_options() failed sending options at %s:%d\n", __FILE__, __LINE__);
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+static int
+sql_exec_skip(DBPROCESS *dbproc)
+{
+	int ret_code;
+
 	if (dbsqlexec(dbproc) == FAIL) {
-		fprintf(stderr, "set_login_options() failed sending options at %s:%d\n", __FILE__, __LINE__);
 		return FALSE;
 	}
-
-	while ((fOK = dbresults(dbproc)) == SUCCEED) {
-		while ((fOK = dbnextrow(dbproc)) == REG_ROW)
-			continue;
-		if (fOK == FAIL) {
-			fprintf(stderr, "set_login_options() failed sending options at %s:%d\n", __FILE__, __LINE__);
-			return FALSE;
-		}
+	while ((ret_code = dbresults(dbproc)) == SUCCEED) {
+		while(dbnextrow(dbproc) != NO_MORE_ROWS) {};
 	}
-	if (fOK == FAIL) {
-		fprintf(stderr, "set_login_options() failed sending options at %s:%d\n", __FILE__, __LINE__);
+	if (ret_code == FAIL) {
 		return FALSE;
 	}
-
 	return TRUE;
 }
 
@@ -953,18 +956,15 @@ xrealloc(void *p, size_t s)
 	return p;
 }
 
-static int
+static void
 free_paramopts(RPCPARAMOPTS *paramopts)
 {
 	if (paramopts->name)
 		free(paramopts->name);
-
 	free(paramopts);
-
-	return TRUE;
 }
 
-static int
+static void
 free_login(RPCLOGIN *login)
 {
 	if (login->interfacesfile)
@@ -983,47 +983,40 @@ free_login(RPCLOGIN *login)
 		free(login->charset);
 	if (login->version)
 		free(login->version);
-
 	free(login);
-
-	return TRUE;
 }
 
-static int
+static void
+free_data_param(RPCPARAM *param)
+{
+	if (param->value)
+		free(param->value);
+	if (param->file)
+		free(param->file);
+	if (param->name)
+		free(param->name);
+	free(param);
+}
+
+static void
 free_data(RPCDATA *data)
 {
 	int i;
-
 	if (data->spname)
 		free(data->spname);
-
-	if (!data->paramslen) {
-		free(data);
-		return TRUE;
+	if (data->paramslen) {
+		for (i=0; i<data->paramslen; i++) {
+			free_data_param(data->params[i]);
+		}
+		free(data->params);
 	}
-
-	for (i=0; i<data->paramslen; i++) {
-		RPCPARAM *param;
-		param = data->params[i];
-		if (param->value)
-			free(param->value);
-		if (param->file)
-			free(param->file);
-		if (param->name)
-			free(param->name);
-		free(param);
-	}
-
-	free(data->params);
 	free(data);
-	return TRUE;
 }
 
-static int
+static void
 free_data_paramsvalue(RPCDATA *data)
 {
 	int i;
-
 	for (i=0; i<data->paramslen; i++) {
 		RPCPARAM *param;
 		param = data->params[i];
@@ -1032,8 +1025,6 @@ free_data_paramsvalue(RPCDATA *data)
 			param->value = NULL;
 		}
 	}
-
-	return TRUE;
 }
 
 static int
