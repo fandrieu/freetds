@@ -1760,8 +1760,12 @@ _dbresults(DBPROCESS * dbproc)
 					dbproc->dbresults_state = _DB_RES_NEXT_RESULT;
 					if (done_flags & TDS_DONE_ERROR)
 						return FAIL;
-					if (result_type == TDS_DONE_RESULT)
+					if (result_type == TDS_DONE_RESULT) {
+/* FIXME */
+tds_free_results(dbproc->tds_socket->res_info);
+dbproc->tds_socket->res_info = tds_alloc_results(0);
 						return SUCCEED;
+					}
 					break;
 
 				case _DB_RES_RESULTSET_EMPTY:
